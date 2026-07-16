@@ -1,0 +1,124 @@
+import { prisma } from '@/lib/db/prisma'
+import { Prisma } from '@prisma/client'
+import { slugify } from '@/modules/shop/lib/slug'
+import {
+  listVariationOptions,
+  getVariantOptionValueMap,
+  hasVariationsTables,
+  importedValueSlug,
+} from '@/modules/product-attributes-for-shop/lib/variations-bridge'
+import {
+  listAttributes,
+  createAttribute,
+  createAttributeValue,
+  ensureUniqueAttributeSlug,
+  nextAttributePosition,
+  nextValuePosition,
+} from '@/modules/product-attributes-for-shop/lib/db/attributes'
+import { clearImportedValuesForProduct } from '@/modules/product-attributes-for-shop/lib/db/assignments'
+import type { PatAttributeWithValues, PatControlType } from '@/modules/product-attributes-for-shop/lib/types'
+
+export type ImportResult = {
+  attributesCreated: number
+  valuesCreated: number
+  variantsLinked: number
+  optionNames: string[]
+}
+
+// Turns a product's shop-variations options (Size, Colour) into filterable
+// attributes and attaches the values to the individual variants that carry them.
+//
+// Matching is by option NAME, not id: two products both having a "Colour" option
+// should feed one shop-wide "Colour" filter, not one per product. An attribute
+// created this way records source_option_name so a later re-import updates it
+// rather than making "Colour-2".
+//
+// Re-importing is idempotent: existing imported assignments for the touched
+// attributes are cleared first, so removing a variant in Shop Variations and
+// re-importing does not leave a phantom filter match behind.
+export async function importVariationOptions(productId: string): Promise<ImportResult> {
+  const empty: ImportResult = { attributesCreated: 0, valuesCreated: 0, variantsLinked: 0, optionNames: [] }
+  if (!(await hasVariationsTables())) return empty
+
+  const options = await listVariationOptions(productId)
+  if (options.length === 0) return empty
+
+  const existing = await listAttributes()
+  let attributesCreated = 0
+  let valuesCreated = 0
+
+  // option value id -> attribute value id, so variants can be linked below.
+  const optionValueToAttributeValue = new Map<string, string>()
+  const touchedAttributeIds: string[] = []
+
+  for (const option of options) {
+    // Prefer an attribute already imported from this option name, else any
+    // attribute the owner happens to have named the same thing (case-insensitive).
+    let attribute: PatAttributeWithValues | undefined =
+      existing.find((a) => a.sourceOptionName?.toLowerCase() === option.name.toLowerCase()) ??
+      existing.find((a) => a.name.toLowerCase() === option.name.toLowerCase())
+
+    if (!attribute) {
+      const slug = await ensureUniqueAttributeSlug(slugify(option.name) || 'attribute')
+      const controlType: PatControlType = option.values.some((v) => v.swatch) ? 'SWATCH' : 'CHECKBOX'
+      const position = await nextAttributePosition()
+      const created = await createAttribute({ name: option.name, slug, controlType, position, sourceOptionName: option.name })
+      attribute = {
+        id: created.id,
+        name: option.name,
+        slug,
+        controlType,
+        position,
+        showInFilters: true,
+        sourceOptionName: option.name,
+        values: [],
+      }
+      existing.push(attribute)
+      attributesCreated++
+    }
+    touchedAttributeIds.push(attribute.id)
+
+    for (const value of option.values) {
+      const slug = importedValueSlug(value.label)
+      let match = attribute.values.find((v) => v.slug === slug || v.label.toLowerCase() === value.label.toLowerCase())
+      if (!match) {
+        // Only carry a hex swatch across; shop-variations also allows a media id
+        // there, which this module has no way to render as a filter dot.
+        const swatch = value.swatch && /^#[0-9a-fA-F]{3,8}$/.test(value.swatch) ? value.swatch : null
+        const position = await nextValuePosition(attribute.id)
+        const created = await createAttributeValue({ attributeId: attribute.id, label: value.label, slug, swatch, position })
+        match = { id: created.id, attributeId: attribute.id, label: value.label, slug, swatch, position }
+        attribute.values.push(match)
+        valuesCreated++
+      }
+      optionValueToAttributeValue.set(value.id, match.id)
+    }
+  }
+
+  // Wipe previous imported assignments for these attributes before re-linking.
+  await clearImportedValuesForProduct(productId, touchedAttributeIds)
+
+  const variantMap = await getVariantOptionValueMap(productId)
+  const rows: { productId: string; valueId: string }[] = []
+  for (const [childProductId, optionValueIds] of variantMap) {
+    for (const optionValueId of optionValueIds) {
+      const valueId = optionValueToAttributeValue.get(optionValueId)
+      if (valueId) rows.push({ productId: childProductId, valueId })
+    }
+  }
+
+  if (rows.length > 0) {
+    await prisma.$executeRaw`
+      INSERT INTO "pat_product_values" ("product_id", "value_id")
+      VALUES ${Prisma.join(rows.map((r) => Prisma.sql`(${r.productId}, ${r.valueId})`))}
+      ON CONFLICT DO NOTHING
+    `
+  }
+
+  return {
+    attributesCreated,
+    valuesCreated,
+    variantsLinked: variantMap.size,
+    optionNames: options.map((o) => o.name),
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "product-attributes-for-shop",
+  "version": "0.1.0",
+  "tablePrefix": "pat_",
+  "description": "Filterable product attributes for the shop: define attributes like Material or Colour, assign them to products and individual variants, and let shoppers narrow the catalogue by them.",
+  "requiresCoreVersion": "0.5.426",
+  "requiresModules": [
+    { "name": "shop", "minVersion": "0.1.26" }
+  ],
+  "permissions": [],
+  "navGroupLabel": "Shop",
+  "navEntries": [
+    { "label": "Product attributes", "path": "/m/product-attributes-for-shop/attributes", "icon": "<path d=\"M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z\"/><circle cx=\"7\" cy=\"7\" r=\"1.5\"/>", "permission": "shop.products" }
+  ],
+  "requiredEnvVars": [],
+  "cookieCategories": [],
+  "extensionPoints": [
+    { "point": "shop.product-editor-sections", "id": "product-attributes-inline", "permission": "shop.products", "import": "./components/admin/ProductAttributesSection", "component": "ProductAttributesSection" }
+  ],
+  "puckBlocks": [
+    { "type": "ShopAttributeFilterGrid", "import": "./components/puck/ShopAttributeFilterGrid", "component": "shopAttributeFilterGridPuckComponent", "rscComponent": "shopAttributeFilterGridPuckRscComponent", "rscImport": "./components/puck/ShopAttributeFilterGrid.rsc", "layoutTypes": ["shopIndex", "shopCategory", "shopCollection"] }
+  ],
+  "memberExtensions": {
+    "activityTypes": [],
+    "notificationCategories": [],
+    "routeTiers": []
+  },
+  "teardown": [
+    "pat_product_values",
+    "pat_attribute_values",
+    "pat_attributes",
+    "pat_settings"
+  ]
+}
