@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PatAttributeWithValues } from '@/modules/product-attributes-for-shop/lib/types'
+import { matchesSelection } from '@/modules/product-attributes-for-shop/lib/filter-logic'
 
 export type FilterShellProps = {
   attributes: PatAttributeWithValues[]
@@ -15,21 +16,6 @@ export type FilterShellProps = {
   // Product Card layout, each tagged data-pat-product, and are only ever
   // shown/hidden here - never re-rendered, so the card design is untouched.
   children: React.ReactNode
-}
-
-// Facet semantics: values within one attribute are OR'd (Red or Blue), separate
-// attributes are AND'd (Red AND Oak). Matches how every high-street shop filter
-// behaves, so it needs no explaining to a shopper.
-function matches(valueIds: string[], selected: Map<string, Set<string>>): boolean {
-  for (const chosen of selected.values()) {
-    if (chosen.size === 0) continue
-    let hit = false
-    for (const valueId of chosen) {
-      if (valueIds.includes(valueId)) { hit = true; break }
-    }
-    if (!hit) return false
-  }
-  return true
 }
 
 function readInitialSelection(attributes: PatAttributeWithValues[]): Map<string, Set<string>> {
@@ -75,7 +61,7 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
     let shown = 0
     for (const el of root.querySelectorAll<HTMLElement>('[data-pat-product]')) {
       const productId = el.dataset.patProduct ?? ''
-      const ok = matches(matrix[productId] ?? [], selected)
+      const ok = matchesSelection(matrix[productId] ?? [], selected)
       el.style.display = ok ? '' : 'none'
       el.toggleAttribute('data-pat-hidden', !ok)
       if (ok) shown++

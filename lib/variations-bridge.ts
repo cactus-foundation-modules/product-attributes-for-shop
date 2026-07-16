@@ -30,8 +30,9 @@ export async function hasVariationsTables(): Promise<boolean> {
   return value
 }
 
-// Test seam: the presence probe is cached for a short window, which would
-// otherwise make a module installed mid-session look absent.
+// Drops the cached probe result. The TTL above means a shop-variations install
+// can take up to 30s to be noticed by a warm server; call this to force the next
+// read to re-probe.
 export function resetVariationsProbeCache(): void {
   cached = null
 }
