@@ -16,6 +16,7 @@ import {
   nextValuePosition,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 import { clearImportedValuesForProduct } from '@/modules/product-attributes-for-shop/lib/db/assignments'
+import { upsertProductAttribute } from '@/modules/product-attributes-for-shop/lib/db/membership'
 import type { PatAttributeWithValues, PatControlType } from '@/modules/product-attributes-for-shop/lib/types'
 
 export type ImportResult = {
@@ -93,6 +94,13 @@ export async function importVariationOptions(productId: string): Promise<ImportR
       }
       optionValueToAttributeValue.set(value.id, match.id)
     }
+  }
+
+  // Bring each imported attribute into the product's set and mark it used for
+  // variations, so it shows as a column on the Variations tab where its per-
+  // variant values were just linked. Existing rows keep their show_in_filters.
+  for (const attributeId of touchedAttributeIds) {
+    await upsertProductAttribute(productId, { attributeId, useForVariations: true, showInFilters: true })
   }
 
   // Wipe previous imported assignments for these attributes before re-linking.

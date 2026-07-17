@@ -86,6 +86,31 @@ export async function getEffectiveValueIdsByProduct(
     }
   }
 
+  // Per-product hiding: a value whose attribute this product has marked out of the
+  // filters does not contribute to the public grid, even though it stays assigned
+  // (e.g. an attribute used only to organise variants). This is narrower than the
+  // shop-wide pat_attributes.show_in_filters, which drops the attribute for the
+  // whole catalogue; both are honoured.
+  const allValueIds = [...new Set([...result.values()].flat())]
+  if (allValueIds.length > 0) {
+    const [attrOfValue, hiddenRows] = await Promise.all([
+      prisma.$queryRaw<{ id: string; attribute_id: string }[]>`
+        SELECT "id", "attribute_id" FROM "pat_attribute_values" WHERE "id" IN (${Prisma.join(allValueIds)})
+      `,
+      prisma.$queryRaw<{ product_id: string; attribute_id: string }[]>`
+        SELECT "product_id", "attribute_id" FROM "pat_product_attributes"
+        WHERE "product_id" IN (${Prisma.join(productIds)}) AND "show_in_filters" = false
+      `,
+    ])
+    if (hiddenRows.length > 0) {
+      const attributeOf = new Map(attrOfValue.map((r) => [r.id, r.attribute_id]))
+      const hidden = new Set(hiddenRows.map((r) => `${r.product_id}:${r.attribute_id}`))
+      for (const [productId, valueIds] of result) {
+        result.set(productId, valueIds.filter((v) => !hidden.has(`${productId}:${attributeOf.get(v) ?? ''}`)))
+      }
+    }
+  }
+
   return result
 }
 

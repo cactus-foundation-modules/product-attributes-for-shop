@@ -142,6 +142,16 @@ export async function getAttributeValueOwner(id: string): Promise<{ attributeId:
   return rows[0] ? { attributeId: rows[0].attribute_id } : null
 }
 
+// Maps each of the given value ids to the attribute it belongs to. Lets a caller
+// tell, in one query, which values sit under a use-for-variations attribute.
+export async function getValueAttributeMap(valueIds: string[]): Promise<Map<string, string>> {
+  if (valueIds.length === 0) return new Map()
+  const rows = await prisma.$queryRaw<{ id: string; attribute_id: string }[]>`
+    SELECT "id", "attribute_id" FROM "pat_attribute_values" WHERE "id" IN (${Prisma.join(valueIds)})
+  `
+  return new Map(rows.map((r) => [r.id, r.attribute_id]))
+}
+
 // Next free position for a new row, so additions land at the end rather than
 // colliding on 0.
 export async function nextAttributePosition(): Promise<number> {

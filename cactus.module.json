@@ -1,8 +1,8 @@
 {
   "name": "product-attributes-for-shop",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "tablePrefix": "pat_",
-  "description": "Filterable product attributes for the shop: define attributes like Material or Colour, assign them to products and individual variants, and let shoppers narrow the catalogue by them.",
+  "description": "Filterable product attributes for the shop: define attributes like Material or Colour, put a set of them on each product, set a value per variant, hide any from the public filters, and let shoppers narrow the catalogue by the rest.",
   "requiresCoreVersion": "0.5.426",
   "requiresModules": [
     { "name": "shop", "minVersion": "0.1.38" }
@@ -15,7 +15,8 @@
   "requiredEnvVars": [],
   "cookieCategories": [],
   "extensionPoints": [
-    { "point": "shop.product-editor-sections", "id": "product-attributes-inline", "label": "Attributes", "order": 55, "permission": "shop.products", "import": "./components/admin/ProductAttributesSection", "component": "ProductAttributesSection" }
+    { "point": "shop.product-editor-sections", "id": "product-attributes-inline", "label": "Attributes", "order": 55, "permission": "shop.products", "import": "./components/admin/ProductAttributesSection", "component": "ProductAttributesSection" },
+    { "point": "shop-variations.variant-field-provider", "id": "product-attributes", "permission": "shop.products", "import": "./lib/variant-field-provider", "component": "productAttributesVariantFieldProvider" }
   ],
   "puckBlocks": [
     { "type": "ShopAttributeFilterGrid", "import": "./components/puck/ShopAttributeFilterGrid", "component": "shopAttributeFilterGridPuckComponent", "rscComponent": "shopAttributeFilterGridPuckRscComponent", "rscImport": "./components/puck/ShopAttributeFilterGrid.rsc", "layoutTypes": ["shopIndex", "shopCategory", "shopCollection"] }
@@ -26,6 +27,7 @@
     "routeTiers": []
   },
   "teardown": [
+    "pat_product_attributes",
     "pat_product_values",
     "pat_attribute_values",
     "pat_attributes",

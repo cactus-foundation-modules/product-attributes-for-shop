@@ -1,30 +1,46 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireShopUser } from '@/modules/shop/lib/access'
-import { getProductAssignments, setProductValueIds } from '@/modules/product-attributes-for-shop/lib/db/assignments'
+import {
+  getProductAssignments,
+  setProductValueIds,
+  clearImportedValuesForProduct,
+} from '@/modules/product-attributes-for-shop/lib/db/assignments'
+import { getProductAttributes, setProductAttributes } from '@/modules/product-attributes-for-shop/lib/db/membership'
 import { listVariantsForProduct } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
-import { listAttributes } from '@/modules/product-attributes-for-shop/lib/db/attributes'
+import { listAttributes, getValueAttributeMap } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 
 // Everything the product editor's attributes panel needs in one round trip: the
-// attribute vocabulary, this product's assignments, and its variants (empty when
-// shop-variations is not installed).
+// attribute vocabulary, this product's set (which attributes it uses, with their
+// two flags), the product-level value assignments, and its variants (empty when
+// shop-variations is not installed). Per-variant values are not here - they live
+// on the Variations tab column and save themselves.
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requireShopUser('shop.products', { allowAccess: true })
   if (gate.error) return gate.error
   const { id } = await params
-  const [attributes, assignments, variants] = await Promise.all([
+  const [attributes, assignments, membership, variants] = await Promise.all([
     listAttributes(),
     getProductAssignments(id),
+    getProductAttributes(id),
     listVariantsForProduct(id),
   ])
-  return NextResponse.json({ attributes, assignments, variants })
+  return NextResponse.json({ attributes, assignments, membership, variants })
 }
 
 const PutBody = z.object({
-  // Values on the product itself.
-  own: z.array(z.string()).max(200),
-  // Values per variant child product id. Absent keys are left untouched.
-  byVariant: z.record(z.string(), z.array(z.string()).max(200)).optional(),
+  // Product-level values (for non-variation attributes in the set).
+  own: z.array(z.string()).max(500),
+  // The product's attribute set with its per-attribute flags.
+  membership: z
+    .array(
+      z.object({
+        attributeId: z.string(),
+        useForVariations: z.boolean(),
+        showInFilters: z.boolean(),
+      }),
+    )
+    .max(200),
 })
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -33,21 +49,26 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params
   const parsed = PutBody.safeParse(await request.json())
   if (!parsed.success) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
+  const { own, membership } = parsed.data
 
-  await setProductValueIds(id, parsed.data.own)
+  // Save the set, then clear assignments for any attribute dropped from it, so a
+  // removed attribute stops dragging the product into its filter.
+  const before = await getProductAttributes(id)
+  await setProductAttributes(id, membership)
+  const keptIds = new Set(membership.map((m) => m.attributeId))
+  const removed = before.map((m) => m.attributeId).filter((a) => !keptIds.has(a))
+  if (removed.length > 0) await clearImportedValuesForProduct(id, removed)
 
-  if (parsed.data.byVariant) {
-    // Only variants that genuinely belong to this product may be written -
-    // otherwise a crafted id could rewrite another product's assignments.
-    const variants = await listVariantsForProduct(id)
-    const owned = new Set(variants.map((v) => v.childProductId))
-    for (const [childProductId, valueIds] of Object.entries(parsed.data.byVariant)) {
-      if (!owned.has(childProductId)) {
-        return NextResponse.json({ error: 'Unknown variant for this product' }, { status: 400 })
-      }
-      await setProductValueIds(childProductId, valueIds)
-    }
+  // A use-for-variations attribute's value belongs on each variant, not on the
+  // product as a whole - strip any such value from the product-level set so the
+  // parent never carries a variation value.
+  const variationIds = new Set(membership.filter((m) => m.useForVariations).map((m) => m.attributeId))
+  let ownToSave = own
+  if (variationIds.size > 0 && own.length > 0) {
+    const valueAttr = await getValueAttributeMap(own)
+    ownToSave = own.filter((v) => !variationIds.has(valueAttr.get(v) ?? ''))
   }
+  await setProductValueIds(id, ownToSave)
 
   return NextResponse.json({ ok: true })
 }

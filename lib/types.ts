@@ -40,3 +40,20 @@ export type PatVariantRef = {
   label: string
   enabled: boolean
 }
+
+// One attribute in a product's set: which attribute, whether its value varies per
+// variant, and whether this product's values for it feed the public filters.
+export type PatProductAttribute = {
+  attributeId: string
+  useForVariations: boolean
+  showInFilters: boolean
+}
+
+// A "use for variations" attribute as the Variations-tab column needs it: the
+// attribute and its selectable values, in display order.
+export type PatVariationColumn = {
+  attributeId: string
+  name: string
+  position: number
+  values: { id: string; label: string; swatch: string | null }[]
+}
