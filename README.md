@@ -9,6 +9,7 @@ Requires the [shop](https://github.com/cactus-foundation-modules/shop) module. W
 - **A shop-wide attribute vocabulary.** Attributes live under **Shop › Product attributes**, not on individual products, so one "Colour" filter spans the whole catalogue instead of a different one per product.
 - **Three ways to pick.** Each attribute renders as a tick list, colour swatches, or a dropdown.
 - **Per-product and per-variant assignment.** An "Attributes" panel appears in the product editor. Where a product has variants, each variant can carry its own values.
+- **Values added where they are needed.** A value can be typed straight onto the product's Attributes tab, or from a variant's cell on the Variations tab, without breaking off to the attributes screen. It joins the attribute's shop-wide list (an existing label is reused, not duplicated), so the vocabulary stays shared while the typing happens in context.
 - **Import from variations.** One button turns a product's existing Size/Colour options into filterable attributes and attaches them to the right variants, so nothing is typed twice.
 - **A filtered storefront grid.** A Puck block that renders your existing Product Card layout and filters instantly in the browser, with the selection mirrored into the URL so a filtered view can be shared.
 

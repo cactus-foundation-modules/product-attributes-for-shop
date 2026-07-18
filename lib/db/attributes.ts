@@ -103,6 +103,20 @@ export async function attributeValueLabelTaken(attributeId: string, label: strin
   return rows.length > 0
 }
 
+// The value of an attribute whose label matches (case-insensitive), if any. The
+// inline "add a value" boxes on the product editor use this to reuse the value
+// somebody already made rather than refusing the addition: from a product's point
+// of view typing "Oak" twice should just work, even though the attributes screen
+// treats the same clash as a mistake worth pointing out.
+export async function findAttributeValueByLabel(attributeId: string, label: string): Promise<PatAttributeValue | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "pat_attribute_values"
+    WHERE "attribute_id" = ${attributeId} AND lower("label") = lower(${label})
+    LIMIT 1
+  `
+  return rows[0] ? mapValue(rows[0]) : null
+}
+
 export async function createAttributeValue(fields: {
   attributeId: string
   label: string

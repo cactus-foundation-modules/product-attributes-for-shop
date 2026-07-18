@@ -6,6 +6,7 @@ import {
   getAttribute,
   createAttributeValue,
   attributeValueLabelTaken,
+  findAttributeValueByLabel,
   ensureUniqueValueSlug,
   nextValuePosition,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
@@ -13,6 +14,10 @@ import {
 const PostBody = z.object({
   label: z.string().min(1).max(80),
   swatch: z.string().regex(/^#[0-9a-fA-F]{3,8}$/).nullable().optional(),
+  // Set by the inline boxes on a product's Attributes and Variations tabs, where
+  // a label that already exists means "use that one", not "you have made a
+  // mistake". The attributes screen leaves it off and still gets the 409.
+  reuseExisting: z.boolean().optional(),
 })
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -27,17 +32,22 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const label = parsed.data.label.trim()
   if (!label) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
-  if (await attributeValueLabelTaken(id, label, '')) {
+
+  if (parsed.data.reuseExisting) {
+    const existing = await findAttributeValueByLabel(id, label)
+    if (existing) return NextResponse.json({ value: existing, reused: true })
+  } else if (await attributeValueLabelTaken(id, label, '')) {
     return NextResponse.json({ error: `"${attribute.name}" already has a value called "${label}".` }, { status: 409 })
   }
 
   const slug = await ensureUniqueValueSlug(id, slugify(label) || 'value')
-  const created = await createAttributeValue({
-    attributeId: id,
-    label,
+  const swatch = parsed.data.swatch ?? null
+  const position = await nextValuePosition(id)
+  const created = await createAttributeValue({ attributeId: id, label, slug, swatch, position })
+  return NextResponse.json({
+    id: created.id,
     slug,
-    swatch: parsed.data.swatch ?? null,
-    position: await nextValuePosition(id),
+    value: { id: created.id, attributeId: id, label, slug, swatch, position },
+    reused: false,
   })
-  return NextResponse.json({ id: created.id, slug })
 }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProductEditorSave, useProductEditorTabBadge } from '@/modules/shop/components/admin/product-editor/context'
 import type {
+  PatAttributeValue,
   PatAttributeWithValues,
   PatProductAssignments,
   PatProductAttribute,
@@ -167,6 +168,54 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
     setStatus(null)
   }
 
+  // Adds a value to an attribute from inside the product editor, so the owner
+  // never has to break off to the attributes screen mid-edit. The value joins the
+  // attribute's shop-wide list (that is what keeps one filter option per real-world
+  // thing rather than a private "Oak" per product) and an existing label of the
+  // same name is reused rather than duplicated. Unlike everything else on this
+  // tab it saves at once - it is a change to the vocabulary, not to this product.
+  const addValue = useCallback(
+    async (attributeId: string, label: string, swatch: string | null): Promise<boolean> => {
+      try {
+        const res = await fetch(`${BASE}/attributes/${attributeId}/values`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label, swatch, reuseExisting: true }),
+        })
+        const payload = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          setError(payload.error ?? 'Could not add that value.')
+          return false
+        }
+        const value = payload.value as PatAttributeValue
+        setData((prev) =>
+          prev
+            ? {
+                ...prev,
+                attributes: prev.attributes.map((a) =>
+                  a.id !== attributeId || a.values.some((v) => v.id === value.id)
+                    ? a
+                    : { ...a, values: [...a.values, value] },
+                ),
+              }
+            : prev,
+        )
+        // A per-variant attribute's value belongs to a variant, so a new one is
+        // only offered in the Variations column; anything else is ticked here.
+        if (!membership.get(attributeId)?.useForVariations) {
+          setOwn((prev) => new Set(prev).add(value.id))
+        }
+        setError(null)
+        setStatus(null)
+        return true
+      } catch {
+        setError('Could not add that value.')
+        return false
+      }
+    },
+    [membership],
+  )
+
   async function copyFromVariations() {
     setBusy(true)
     setError(null)
@@ -203,8 +252,9 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
           <div style={{ minWidth: 0 }}>
             <h3 className="spe-section-head">This product&rsquo;s attributes</h3>
             <p className="spe-section-blurb">
-              Pick which attributes this product uses. Tick a value for ordinary attributes; turn on{' '}
-              <strong>Use for variations</strong> to set the value per variant on the Variations tab instead.
+              Pick which attributes this product uses. Tick a value for ordinary attributes, or add your own
+              underneath; turn on <strong>Use for variations</strong> to set the value per variant on the
+              Variations tab instead.
             </p>
           </div>
           {variationsInstalled && hasVariants && (
@@ -266,8 +316,8 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                       {flags.useForVariations ? (
                         <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
                           {hasVariants
-                            ? 'Set each variant’s value in the new column on the Variations tab.'
-                            : 'Add variants on the Variations tab, then set each one’s value there.'}
+                            ? 'Set each variant’s value in the new column on the Variations tab. Add the choices it offers below.'
+                            : 'Add variants on the Variations tab, then set each one’s value there. Add the choices it offers below.'}
                         </p>
                       ) : attribute.values.length === 0 ? (
                         <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>No values set up yet.</span>
@@ -284,6 +334,8 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                           ))}
                         </div>
                       )}
+
+                      <AddValueBox attribute={attribute} onAdd={addValue} />
                     </div>
                   )
                 })}
@@ -318,6 +370,67 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
           </>
         )}
       </section>
+    </div>
+  )
+}
+
+// The "add a value" row under one attribute on the product editor. Swatch
+// attributes get a colour alongside the label, matching the attributes screen, so
+// a colour added here still shows as a dot on the storefront filter rather than a
+// blank circle.
+function AddValueBox({
+  attribute,
+  onAdd,
+}: {
+  attribute: PatAttributeWithValues
+  onAdd: (attributeId: string, label: string, swatch: string | null) => Promise<boolean>
+}) {
+  const [label, setLabel] = useState('')
+  const [swatch, setSwatch] = useState('#888888')
+  const [saving, setSaving] = useState(false)
+  const isSwatch = attribute.controlType === 'SWATCH'
+
+  async function submit() {
+    const trimmed = label.trim()
+    if (!trimmed || saving) return
+    setSaving(true)
+    const ok = await onAdd(attribute.id, trimmed, isSwatch ? swatch : null)
+    setSaving(false)
+    if (ok) setLabel('')
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.625rem' }}>
+      <input
+        className="form-control"
+        style={{ flex: '1 1 10rem', minWidth: '8rem', fontSize: '0.8125rem' }}
+        placeholder={`Add a ${attribute.name.toLowerCase()} value…`}
+        value={label}
+        disabled={saving}
+        onChange={(e) => setLabel(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            // The product editor wraps this in a form; Enter must add a value, not save the product.
+            e.preventDefault()
+            void submit()
+          }
+        }}
+        aria-label={`New value for ${attribute.name}`}
+      />
+      {isSwatch && (
+        <input
+          type="color"
+          className="form-control"
+          style={{ flex: '0 0 3rem', padding: '0.125rem' }}
+          value={swatch}
+          disabled={saving}
+          onChange={(e) => setSwatch(e.target.value)}
+          aria-label={`Colour for the new ${attribute.name} value`}
+        />
+      )}
+      <button type="button" className="btn btn-secondary btn-sm" disabled={saving || !label.trim()} onClick={() => void submit()}>
+        Add value
+      </button>
     </div>
   )
 }
