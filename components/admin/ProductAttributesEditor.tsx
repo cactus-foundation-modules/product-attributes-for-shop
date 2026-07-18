@@ -9,6 +9,8 @@ import type {
   PatProductAttribute,
   PatVariantRef,
 } from '@/modules/product-attributes-for-shop/lib/types'
+import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
+import { SwatchImagePicker } from '@/modules/product-attributes-for-shop/components/admin/SwatchImagePicker'
 
 type Payload = {
   attributes: PatAttributeWithValues[]
@@ -326,9 +328,12 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                           {attribute.values.map((value) => (
                             <label key={value.id} className="spe-check" style={{ border: '1px solid var(--color-border)' }}>
                               <input type="checkbox" checked={own.has(value.id)} onChange={() => toggleOwn(value.id)} />
-                              {value.swatch && (
+                              {value.swatch && isImageSwatch(value.swatch) ? (
+                                // eslint-disable-next-line @next/next/no-img-element -- media library URLs are arbitrary remote hosts, not a configured next/image loader
+                                <img src={value.swatch} alt="" style={{ width: 16, height: 16, objectFit: 'cover', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }} />
+                              ) : value.swatch ? (
                                 <span aria-hidden style={{ width: 10, height: 10, borderRadius: 'var(--radius-full)', background: value.swatch, border: '1px solid var(--color-border)' }} />
-                              )}
+                              ) : null}
                               {value.label}
                             </label>
                           ))}
@@ -375,9 +380,9 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
 }
 
 // The "add a value" row under one attribute on the product editor. Swatch
-// attributes get a colour alongside the label, matching the attributes screen, so
-// a colour added here still shows as a dot on the storefront filter rather than a
-// blank circle.
+// attributes get a colour alongside the label and picture attributes get a
+// thumbnail, matching the attributes screen, so a value added here still shows
+// its visual on the storefront filter rather than a blank circle.
 function AddValueBox({
   attribute,
   onAdd,
@@ -387,16 +392,19 @@ function AddValueBox({
 }) {
   const [label, setLabel] = useState('')
   const [swatch, setSwatch] = useState('#888888')
+  const [image, setImage] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const isSwatch = attribute.controlType === 'SWATCH'
+  const isImage = attribute.controlType === 'IMAGE'
 
   async function submit() {
     const trimmed = label.trim()
     if (!trimmed || saving) return
     setSaving(true)
-    const ok = await onAdd(attribute.id, trimmed, isSwatch ? swatch : null)
+    const ok = await onAdd(attribute.id, trimmed, isSwatch ? swatch : isImage ? image : null)
     setSaving(false)
-    if (ok) setLabel('')
+    // The picture is cleared with the label - it belonged to the value just added.
+    if (ok) { setLabel(''); setImage(null) }
   }
 
   return (
@@ -426,6 +434,16 @@ function AddValueBox({
           disabled={saving}
           onChange={(e) => setSwatch(e.target.value)}
           aria-label={`Colour for the new ${attribute.name} value`}
+        />
+      )}
+      {isImage && (
+        <SwatchImagePicker
+          attributeId={attribute.id}
+          value={image}
+          label={`the new ${attribute.name} value`}
+          disabled={saving}
+          size={28}
+          onPick={(url) => setImage(url)}
         />
       )}
       <button type="button" className="btn btn-secondary btn-sm" disabled={saving || !label.trim()} onClick={() => void submit()}>

@@ -2,11 +2,14 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import type { PatAttributeWithValues, PatControlType } from '@/modules/product-attributes-for-shop/lib/types'
+import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
+import { SwatchImagePicker } from '@/modules/product-attributes-for-shop/components/admin/SwatchImagePicker'
 
 const CONTROL_LABELS: Record<PatControlType, string> = {
   CHECKBOX: 'Tick list',
   SWATCH: 'Colour swatches',
   DROPDOWN: 'Dropdown',
+  IMAGE: 'Picture swatches',
 }
 
 // The shop-wide attribute vocabulary: what can be filtered by, and which values
@@ -128,17 +131,21 @@ function AttributeCard({
 }) {
   const [newValue, setNewValue] = useState('')
   const [newSwatch, setNewSwatch] = useState('#888888')
+  const [newImage, setNewImage] = useState<string | null>(null)
   const base = '/api/m/product-attributes-for-shop/admin'
   const isSwatch = attribute.controlType === 'SWATCH'
+  const isImage = attribute.controlType === 'IMAGE'
 
   async function addValue() {
     const label = newValue.trim()
     if (!label) return
     const ok = await send(`${base}/attributes/${attribute.id}/values`, 'POST', {
       label,
-      swatch: isSwatch ? newSwatch : null,
+      swatch: isSwatch ? newSwatch : isImage ? newImage : null,
     })
-    if (ok) setNewValue('')
+    // The picture is cleared alongside the label: it belonged to the value just
+    // added, and leaving it loaded would quietly give the next value the same one.
+    if (ok) { setNewValue(''); setNewImage(null) }
   }
 
   return (
@@ -199,9 +206,18 @@ function AttributeCard({
               border: '1px solid var(--color-border)',
             }}
           >
-            {value.swatch && (
+            {isImage ? (
+              <SwatchImagePicker
+                attributeId={attribute.id}
+                value={value.swatch && isImageSwatch(value.swatch) ? value.swatch : null}
+                label={value.label}
+                disabled={busy}
+                size={18}
+                onPick={(url) => send(`${base}/values/${value.id}`, 'PATCH', { swatch: url }).then(() => undefined)}
+              />
+            ) : value.swatch ? (
               <span aria-hidden style={{ width: 10, height: 10, borderRadius: 999, background: value.swatch, border: '1px solid var(--color-border)' }} />
-            )}
+            ) : null}
             {value.label}
             <button
               type="button"
@@ -234,6 +250,16 @@ function AttributeCard({
             value={newSwatch}
             onChange={(e) => setNewSwatch(e.target.value)}
             aria-label={`Colour for the new ${attribute.name} value`}
+          />
+        )}
+        {isImage && (
+          <SwatchImagePicker
+            attributeId={attribute.id}
+            value={newImage}
+            label={`the new ${attribute.name} value`}
+            disabled={busy}
+            size={28}
+            onPick={(url) => setNewImage(url)}
           />
         )}
         <button className="btn btn-secondary" disabled={busy || !newValue.trim()} onClick={() => void addValue()}>Add value</button>

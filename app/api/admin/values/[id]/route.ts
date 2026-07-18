@@ -5,14 +5,19 @@ import { slugify } from '@/modules/shop/lib/slug'
 import {
   updateAttributeValue,
   deleteAttributeValue,
+  getAttributeValue,
   getAttributeValueOwner,
   attributeValueLabelTaken,
   ensureUniqueValueSlug,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
+import { fileSwatchImage } from '@/modules/product-attributes-for-shop/lib/media-folder'
+import { isImageSwatch, isValidSwatch, SWATCH_MAX_LENGTH } from '@/modules/product-attributes-for-shop/lib/types'
 
 const PatchBody = z.object({
   label: z.string().min(1).max(80).optional(),
-  swatch: z.string().regex(/^#[0-9a-fA-F]{3,8}$/).nullable().optional(),
+  // A hex colour or a picture url - see isValidSwatch. Anything else is refused
+  // rather than stored and rendered, since this string ends up in an <img src>.
+  swatch: z.string().max(SWATCH_MAX_LENGTH).refine(isValidSwatch).nullable().optional(),
   position: z.number().int().optional(),
 })
 
@@ -36,6 +41,19 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
 
   await updateAttributeValue(id, { ...parsed.data, ...(label !== undefined ? { label, slug } : {}) })
+
+  // File a newly-picked picture in the attribute's folder. Filing can rewrite the
+  // url, so the stored value is handed back for the editor to show rather than
+  // the one that was sent in.
+  const swatch = parsed.data.swatch
+  if (swatch && isImageSwatch(swatch)) {
+    const owner = await getAttributeValueOwner(id)
+    if (owner) {
+      await fileSwatchImage(owner.attributeId, id, swatch)
+      return NextResponse.json({ ok: true, swatch: (await getAttributeValue(id))?.swatch ?? swatch })
+    }
+  }
+
   return NextResponse.json({ ok: true })
 }
 

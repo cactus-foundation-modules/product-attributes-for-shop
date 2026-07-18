@@ -18,6 +18,7 @@ import {
 import { clearImportedValuesForProduct } from '@/modules/product-attributes-for-shop/lib/db/assignments'
 import { upsertProductAttribute } from '@/modules/product-attributes-for-shop/lib/db/membership'
 import type { PatAttributeWithValues, PatControlType } from '@/modules/product-attributes-for-shop/lib/types'
+import { isHexSwatch, isImageSwatch, isValidSwatch } from '@/modules/product-attributes-for-shop/lib/types'
 
 export type ImportResult = {
   attributesCreated: number
@@ -61,7 +62,15 @@ export async function importVariationOptions(productId: string): Promise<ImportR
 
     if (!attribute) {
       const slug = await ensureUniqueAttributeSlug(slugify(option.name) || 'attribute')
-      const controlType: PatControlType = option.values.some((v) => v.swatch) ? 'SWATCH' : 'CHECKBOX'
+      // Pictures win over colours when an option carries both: shop-variations
+      // keeps either in the same column, and a filter showing colour dots for the
+      // values that happen to have one is a worse guess than picture tiles with
+      // an empty tile or two.
+      const controlType: PatControlType = option.values.some((v) => v.swatch && isImageSwatch(v.swatch))
+        ? 'IMAGE'
+        : option.values.some((v) => v.swatch && isHexSwatch(v.swatch))
+          ? 'SWATCH'
+          : 'CHECKBOX'
       const position = await nextAttributePosition()
       const created = await createAttribute({ name: option.name, slug, controlType, position, sourceOptionName: option.name })
       attribute = {
@@ -83,9 +92,10 @@ export async function importVariationOptions(productId: string): Promise<ImportR
       const slug = importedValueSlug(value.label)
       let match = attribute.values.find((v) => v.slug === slug || v.label.toLowerCase() === value.label.toLowerCase())
       if (!match) {
-        // Only carry a hex swatch across; shop-variations also allows a media id
-        // there, which this module has no way to render as a filter dot.
-        const swatch = value.swatch && /^#[0-9a-fA-F]{3,8}$/.test(value.swatch) ? value.swatch : null
+        // Hex colours and picture urls both come across now that IMAGE exists.
+        // Anything else shop-variations may hold there - a bare media id, say -
+        // is still dropped: there is nothing this module could render from it.
+        const swatch = value.swatch && isValidSwatch(value.swatch) ? value.swatch : null
         const position = await nextValuePosition(attribute.id)
         const created = await createAttributeValue({ attributeId: attribute.id, label: value.label, slug, swatch, position })
         match = { id: created.id, attributeId: attribute.id, label: value.label, slug, swatch, position }

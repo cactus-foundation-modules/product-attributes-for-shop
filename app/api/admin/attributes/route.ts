@@ -19,7 +19,7 @@ export async function GET() {
 
 const PostBody = z.object({
   name: z.string().min(1).max(80),
-  controlType: z.enum(['CHECKBOX', 'SWATCH', 'DROPDOWN']).default('CHECKBOX'),
+  controlType: z.enum(['CHECKBOX', 'SWATCH', 'DROPDOWN', 'IMAGE']).default('CHECKBOX'),
 })
 
 export async function POST(request: Request) {

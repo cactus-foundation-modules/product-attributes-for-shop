@@ -149,6 +149,13 @@ export async function deleteAttributeValue(id: string): Promise<void> {
   await prisma.$executeRaw`DELETE FROM "pat_attribute_values" WHERE "id" = ${id}`
 }
 
+export async function getAttributeValue(id: string): Promise<PatAttributeValue | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "pat_attribute_values" WHERE "id" = ${id} LIMIT 1
+  `
+  return rows[0] ? mapValue(rows[0]) : null
+}
+
 export async function getAttributeValueOwner(id: string): Promise<{ attributeId: string } | null> {
   const rows = await prisma.$queryRaw<{ attribute_id: string }[]>`
     SELECT "attribute_id" FROM "pat_attribute_values" WHERE "id" = ${id} LIMIT 1

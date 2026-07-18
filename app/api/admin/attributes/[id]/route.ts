@@ -12,7 +12,7 @@ import {
 
 const PatchBody = z.object({
   name: z.string().min(1).max(80).optional(),
-  controlType: z.enum(['CHECKBOX', 'SWATCH', 'DROPDOWN']).optional(),
+  controlType: z.enum(['CHECKBOX', 'SWATCH', 'DROPDOWN', 'IMAGE']).optional(),
   position: z.number().int().optional(),
   showInFilters: z.boolean().optional(),
 })

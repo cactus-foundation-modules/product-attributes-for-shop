@@ -7,7 +7,8 @@ Requires the [shop](https://github.com/cactus-foundation-modules/shop) module. W
 ## What it does
 
 - **A shop-wide attribute vocabulary.** Attributes live under **Shop › Product attributes**, not on individual products, so one "Colour" filter spans the whole catalogue instead of a different one per product.
-- **Three ways to pick.** Each attribute renders as a tick list, colour swatches, or a dropdown.
+- **Four ways to pick.** Each attribute renders as a tick list, colour swatches, picture swatches, or a dropdown.
+- **Picture swatches.** A value can carry a picture instead of a colour - an oak grain, a fabric weave, a finish - chosen from your media library or dropped straight onto the thumbnail. Pictures are filed under **Shop › Attributes › (the attribute)**, not under a product, because a value belongs to the whole catalogue rather than to whichever product was open at the time.
 - **Per-product and per-variant assignment.** An "Attributes" panel appears in the product editor. Where a product has variants, each variant can carry its own values.
 - **Values added where they are needed.** A value can be typed straight onto the product's Attributes tab, or from a variant's cell on the Variations tab, without breaking off to the attributes screen. It joins the attribute's shop-wide list (an existing label is reused, not duplicated), so the vocabulary stays shared while the typing happens in context.
 - **Import from variations.** One button turns a product's existing Size/Colour options into filterable attributes and attaches them to the right variants, so nothing is typed twice.
@@ -50,7 +51,7 @@ Everything is gated on the shop's existing `shop.products` permission. The modul
 Four tables, all prefixed `pat_`:
 
 - `pat_attributes` - the vocabulary
-- `pat_attribute_values` - values of each attribute
+- `pat_attribute_values` - values of each attribute (the `swatch` column holds a hex colour for a colour attribute and a picture url for a picture one - one visual per value either way)
 - `pat_product_values` - which products carry which values (variant child products included, which is what makes per-variant attributes work without a second table)
 - `pat_settings` - single row: hide empty filter options, roll variant values up onto the parent
 

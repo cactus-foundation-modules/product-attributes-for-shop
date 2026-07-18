@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PatAttributeWithValues } from '@/modules/product-attributes-for-shop/lib/types'
+import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
 import { matchesSelection } from '@/modules/product-attributes-for-shop/lib/filter-logic'
 
 export type FilterShellProps = {
@@ -142,6 +143,34 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
                   </option>
                 ))}
               </select>
+            ) : attribute.controlType === 'IMAGE' ? (
+              <div className="pat-images">
+                {attribute.values.map((value) => {
+                  const on = selected.get(attribute.id)?.has(value.id) ?? false
+                  // A value whose swatch is a colour (the attribute was switched
+                  // from colours to pictures, say) shows the empty tile rather
+                  // than a broken image: the label underneath still names it.
+                  const picture = value.swatch && isImageSwatch(value.swatch) ? value.swatch : null
+                  return (
+                    <button
+                      key={value.id}
+                      type="button"
+                      className={`pat-image${on ? ' is-on' : ''}`}
+                      aria-pressed={on}
+                      title={showCounts ? `${value.label} (${counts[value.id] ?? 0})` : value.label}
+                      onClick={() => toggle(attribute.id, value.id)}
+                    >
+                      {picture ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- media library URLs are arbitrary remote hosts, not a configured next/image loader
+                        <img className="pat-image-pic" src={picture} alt="" loading="lazy" />
+                      ) : (
+                        <span className="pat-image-pic pat-image-blank" aria-hidden />
+                      )}
+                      <span className="pat-image-label">{value.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
             ) : attribute.controlType === 'SWATCH' ? (
               <div className="pat-swatches">
                 {attribute.values.map((value) => {

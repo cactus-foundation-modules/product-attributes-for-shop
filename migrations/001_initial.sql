@@ -25,12 +25,15 @@ CREATE TABLE IF NOT EXISTS "pat_attributes" (
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "pat_attributes_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "pat_attributes_slug_key" UNIQUE ("slug"),
-    CONSTRAINT "pat_attributes_control_type_check" CHECK ("control_type" IN ('CHECKBOX', 'SWATCH', 'DROPDOWN'))
+    -- IMAGE arrived in 003; kept in step here so a fresh install builds the
+    -- final constraint in one go rather than immediately re-writing it.
+    CONSTRAINT "pat_attributes_control_type_check" CHECK ("control_type" IN ('CHECKBOX', 'SWATCH', 'DROPDOWN', 'IMAGE'))
 );
 CREATE INDEX IF NOT EXISTS "pat_attributes_position_idx" ON "pat_attributes" ("position");
 
--- A value of an attribute, e.g. "Oak" or "Red". swatch holds a hex colour for
--- swatch-style controls; null otherwise.
+-- A value of an attribute, e.g. "Oak" or "Red". swatch holds this value's one
+-- visual: a hex colour for a SWATCH attribute, a media url for an IMAGE one,
+-- null for the controls that show no visual at all.
 CREATE TABLE IF NOT EXISTS "pat_attribute_values" (
     "id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
     "attribute_id" TEXT NOT NULL,

@@ -33,6 +33,14 @@ export function attributeFilterCss({ tabletBp, mobileBp }: Breakpoints): string 
 .pat-swatch:hover{border-color:var(--color-text-muted)}
 .pat-swatch.is-on{border-color:var(--color-primary);box-shadow:0 0 0 1px var(--color-primary) inset;color:var(--color-fg);font-weight:600}
 .pat-swatch-dot{width:14px;height:14px;border-radius:999px;border:1px solid var(--color-border);flex:none}
+.pat-images{display:flex;flex-wrap:wrap;gap:10px}
+.pat-image{display:flex;flex-direction:column;align-items:center;gap:5px;width:64px;padding:0;border:0;background:none;cursor:pointer;font:inherit;color:var(--color-text);line-height:1.2}
+.pat-image-pic{width:56px;height:56px;object-fit:cover;display:block;border-radius:8px;border:1px solid var(--color-border);background:var(--color-bg-subtle)}
+.pat-image-blank{border-style:dashed}
+.pat-image:hover .pat-image-pic{border-color:var(--color-text-muted)}
+.pat-image.is-on .pat-image-pic{border-color:var(--color-primary);box-shadow:0 0 0 2px var(--color-primary)}
+.pat-image.is-on{color:var(--color-fg);font-weight:600}
+.pat-image-label{font-size:12px;text-align:center;overflow-wrap:anywhere}
 .pat-empty{margin:24px 0 0;font-size:14px;color:var(--color-text-muted)}
 @media (max-width:${tabletBp}){
   .pat-pos-left{grid-template-columns:1fr}
