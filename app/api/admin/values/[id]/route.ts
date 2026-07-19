@@ -12,13 +12,19 @@ import {
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 import { fileSwatchImage } from '@/modules/product-attributes-for-shop/lib/media-folder'
 import { syncSourcedOptionValues } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
-import { isImageSwatch, isValidSwatch, SWATCH_MAX_LENGTH } from '@/modules/product-attributes-for-shop/lib/types'
+import { isImageSwatch, isValidSwatch, SWATCH_MAX_LENGTH, SWATCH_SIZE_MAX_LENGTH } from '@/modules/product-attributes-for-shop/lib/types'
 
 const PatchBody = z.object({
   label: z.string().min(1).max(80).optional(),
   // A hex colour or a picture url - see isValidSwatch. Anything else is refused
   // rather than stored and rendered, since this string ends up in an <img src>.
   swatch: z.string().max(SWATCH_MAX_LENGTH).refine(isValidSwatch).nullable().optional(),
+  // The picture's real-world size, as typed. Editable after the value was made,
+  // which is the point of it being here rather than only on the add form: the
+  // figure often arrives from the supplier after the swatch photograph does.
+  // Null clears it; the empty string is normalised to null below so a cleared box
+  // and a never-filled one are the same thing to everything downstream.
+  swatchSize: z.string().max(SWATCH_SIZE_MAX_LENGTH).nullable().optional(),
   position: z.number().int().optional(),
 })
 
@@ -41,7 +47,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     slug = await ensureUniqueValueSlug(owner.attributeId, slugify(label) || 'value', id)
   }
 
-  await updateAttributeValue(id, { ...parsed.data, ...(label !== undefined ? { label, slug } : {}) })
+  // A blank box means "no size", not a size of "". Normalised here so the column
+  // holds one representation of "not given" rather than two.
+  const swatchSize =
+    parsed.data.swatchSize === undefined ? undefined : parsed.data.swatchSize?.trim() || null
+
+  await updateAttributeValue(id, {
+    ...parsed.data,
+    ...(swatchSize !== undefined ? { swatchSize } : {}),
+    ...(label !== undefined ? { label, slug } : {}),
+  })
 
   // File a newly-picked picture in the attribute's folder. Filing can rewrite the
   // url, so the stored value is handed back for the editor to show rather than

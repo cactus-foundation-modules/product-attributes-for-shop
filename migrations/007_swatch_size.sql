@@ -1,0 +1,22 @@
+-- Adds an optional real-world size to an attribute value's picture swatch.
+--
+-- A picture swatch is a photograph of a real material, and a photograph on its own
+-- says nothing about how big the thing in it is: the same 800px tile could be a
+-- 5cm weave or a 60cm marble slab. Anything that draws the material at true scale -
+-- the 3D material configurator being the first - needs that number, and until now
+-- it had to be smuggled into a second attribute whose values were labelled
+-- "20x20cm". A field of its own, beside the picture it describes, is where it
+-- belongs.
+--
+-- Free text rather than a number, because an owner has the figure to hand in
+-- whichever unit the supplier quoted: "20cm", "200mm", "0.2m" and a bare "20" are
+-- all things a reader is expected to cope with. Null (or empty) means the size was
+-- not given, which every value written before this column existed is - so nothing
+-- may treat a missing size as an error, only as "not calibrated yet".
+--
+-- Applies to picture-swatch (IMAGE) values in practice, but the column is not
+-- constrained to them: an attribute can be switched between control types, and
+-- throwing the size away on a switch to colours and back would make that a
+-- data-loss trap rather than a change of mind - the same reasoning the `swatch`
+-- column already follows.
+ALTER TABLE "pat_attribute_values" ADD COLUMN IF NOT EXISTS "swatch_size" TEXT;

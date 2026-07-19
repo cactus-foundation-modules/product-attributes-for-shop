@@ -12,13 +12,17 @@ import {
   nextValuePosition,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 import { fileSwatchImage } from '@/modules/product-attributes-for-shop/lib/media-folder'
-import { isImageSwatch, isValidSwatch, SWATCH_MAX_LENGTH } from '@/modules/product-attributes-for-shop/lib/types'
+import { isImageSwatch, isValidSwatch, SWATCH_MAX_LENGTH, SWATCH_SIZE_MAX_LENGTH } from '@/modules/product-attributes-for-shop/lib/types'
 
 const PostBody = z.object({
   label: z.string().min(1).max(80),
   // A hex colour or a picture url - see isValidSwatch. Anything else is refused
   // rather than stored and rendered, since this string ends up in an <img src>.
   swatch: z.string().max(SWATCH_MAX_LENGTH).refine(isValidSwatch).nullable().optional(),
+  // The picture's real-world size, as typed ("20cm", "200mm", a bare "20"). Left
+  // off by every caller but the attributes screen's picture-swatch form, and
+  // optional there too - a swatch with no size given simply draws uncalibrated.
+  swatchSize: z.string().max(SWATCH_SIZE_MAX_LENGTH).nullable().optional(),
   // Set by the inline boxes on a product's Attributes and Variations tabs, where
   // a label that already exists means "use that one", not "you have made a
   // mistake". The attributes screen leaves it off and still gets the 409.
@@ -47,8 +51,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const slug = await ensureUniqueValueSlug(id, slugify(label) || 'value')
   const swatch = parsed.data.swatch ?? null
+  // A blank box is "no size", not a size of "" - see the PATCH route, which
+  // normalises the same way so an edit and an add cannot disagree.
+  const swatchSize = parsed.data.swatchSize?.trim() || null
   const position = await nextValuePosition(id)
-  const created = await createAttributeValue({ attributeId: id, label, slug, swatch, position })
+  const created = await createAttributeValue({ attributeId: id, label, slug, swatch, swatchSize, position })
 
   // Filing a picture can rewrite its url (the library keys blobs by folder), so
   // the row is re-read rather than echoing the url that was sent in - otherwise
@@ -62,7 +69,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   return NextResponse.json({
     id: created.id,
     slug,
-    value: { id: created.id, attributeId: id, label, slug, swatch: stored, position },
+    value: { id: created.id, attributeId: id, label, slug, swatch: stored, swatchSize, position },
     reused: false,
   })
 }

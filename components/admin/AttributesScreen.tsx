@@ -377,6 +377,7 @@ function AttributeCard({
   const [newValue, setNewValue] = useState('')
   const [newSwatch, setNewSwatch] = useState('#888888')
   const [newImage, setNewImage] = useState<string | null>(null)
+  const [newSwatchSize, setNewSwatchSize] = useState('')
   // What a rename did beyond this screen. Cleared on the next one so it never
   // describes a rename other than the last.
   const [renameNote, setRenameNote] = useState<string | null>(null)
@@ -390,10 +391,14 @@ function AttributeCard({
     const ok = await send(`${base}/attributes/${attribute.id}/values`, 'POST', {
       label,
       swatch: isSwatch ? newSwatch : isImage ? newImage : null,
+      // Only a picture swatch has a real-world size worth recording; a colour dot
+      // and a plain word have nothing to measure.
+      swatchSize: isImage ? newSwatchSize.trim() || null : null,
     })
-    // The picture is cleared alongside the label: it belonged to the value just
-    // added, and leaving it loaded would quietly give the next value the same one.
-    if (ok) { setNewValue(''); setNewImage(null) }
+    // The picture and its size are cleared alongside the label: they belonged to
+    // the value just added, and leaving them loaded would quietly give the next
+    // value the same ones.
+    if (ok) { setNewValue(''); setNewImage(null); setNewSwatchSize('') }
   }
 
   // A rename can reach further than this screen, so say how far. Options that
@@ -589,6 +594,43 @@ function AttributeCard({
             >
               {value.label}
             </button>
+            {/* The swatch size, editable in place for the same reason the colour
+                is: the figure usually turns up after the photograph, and deleting
+                the value to re-add it with a size would take every product ticked
+                against it down too. Shown as a dash when it has never been set, so
+                there is something to click either way. */}
+            {isImage && (
+              <button
+                type="button"
+                aria-label={`Swatch size for ${value.label}`}
+                title={value.swatchSize ? 'Change the swatch size' : 'Set the swatch size'}
+                disabled={busy}
+                onClick={() => {
+                  const next = prompt(
+                    `Real-world size of the "${value.label}" swatch, e.g. 20cm. Leave blank for none.`,
+                    value.swatchSize ?? '',
+                  )
+                  if (next === null) return
+                  const trimmed = next.trim()
+                  if (trimmed !== (value.swatchSize ?? '')) {
+                    void onEditValue(value.id, value.label, { swatchSize: trimmed || null })
+                  }
+                }}
+                style={{
+                  border: 0,
+                  background: 'none',
+                  padding: 0,
+                  font: 'inherit',
+                  fontSize: '0.75rem',
+                  color: 'var(--color-text-muted)',
+                  cursor: busy ? 'default' : 'pointer',
+                  textDecoration: 'underline dotted',
+                  textUnderlineOffset: '0.2em',
+                }}
+              >
+                {value.swatchSize || 'size?'}
+              </button>
+            )}
             <button
               type="button"
               aria-label={`Delete ${value.label}`}
@@ -630,6 +672,21 @@ function AttributeCard({
             disabled={busy}
             size={28}
             onPick={(url) => setNewImage(url)}
+          />
+        )}
+        {/* Optional: how big the real material in that picture is. Anything drawing
+            the swatch at true scale - the 3D material configurator first among them -
+            reads this rather than guessing from the image. Left blank it simply goes
+            undrawn to scale, which is what every picture swatch did before. */}
+        {isImage && (
+          <input
+            className="form-control"
+            style={{ flex: '0 1 7rem', minWidth: '5rem' }}
+            placeholder="Size, e.g. 20cm"
+            value={newSwatchSize}
+            onChange={(e) => setNewSwatchSize(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void addValue() }}
+            aria-label={`Swatch size for the new ${attribute.name} value`}
           />
         )}
         <button className="btn btn-secondary" disabled={busy || !newValue.trim()} onClick={() => void addValue()}>Add value</button>

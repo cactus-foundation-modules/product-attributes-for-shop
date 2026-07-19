@@ -22,6 +22,7 @@ function mapValue(r: Record<string, unknown>): PatAttributeValue {
     label: r.label as string,
     slug: r.slug as string,
     swatch: (r.swatch as string | null) ?? null,
+    swatchSize: (r.swatch_size as string | null) ?? null,
     position: r.position as number,
   }
 }
@@ -153,11 +154,12 @@ export async function createAttributeValue(fields: {
   label: string
   slug: string
   swatch: string | null
+  swatchSize?: string | null
   position: number
 }): Promise<{ id: string }> {
   const rows = await prisma.$queryRaw<[{ id: string }]>`
-    INSERT INTO "pat_attribute_values" ("attribute_id", "label", "slug", "swatch", "position")
-    VALUES (${fields.attributeId}, ${fields.label}, ${fields.slug}, ${fields.swatch}, ${fields.position})
+    INSERT INTO "pat_attribute_values" ("attribute_id", "label", "slug", "swatch", "swatch_size", "position")
+    VALUES (${fields.attributeId}, ${fields.label}, ${fields.slug}, ${fields.swatch}, ${fields.swatchSize ?? null}, ${fields.position})
     RETURNING "id"
   `
   return rows[0]
@@ -165,12 +167,15 @@ export async function createAttributeValue(fields: {
 
 export async function updateAttributeValue(
   id: string,
-  fields: { label?: string; slug?: string; swatch?: string | null; position?: number },
+  fields: { label?: string; slug?: string; swatch?: string | null; swatchSize?: string | null; position?: number },
 ): Promise<void> {
   const sets: Prisma.Sql[] = []
   if (fields.label !== undefined) sets.push(Prisma.sql`"label" = ${fields.label}`)
   if (fields.slug !== undefined) sets.push(Prisma.sql`"slug" = ${fields.slug}`)
   if (fields.swatch !== undefined) sets.push(Prisma.sql`"swatch" = ${fields.swatch}`)
+  // Explicit null clears a size that was set by mistake, so `!== undefined` again
+  // rather than a truthiness check.
+  if (fields.swatchSize !== undefined) sets.push(Prisma.sql`"swatch_size" = ${fields.swatchSize}`)
   if (fields.position !== undefined) sets.push(Prisma.sql`"position" = ${fields.position}`)
   if (sets.length === 0) return
   await prisma.$executeRaw`UPDATE "pat_attribute_values" SET ${Prisma.join(sets, ', ')} WHERE "id" = ${id}`

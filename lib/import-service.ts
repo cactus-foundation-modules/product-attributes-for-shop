@@ -104,7 +104,9 @@ export async function importVariationOptions(productId: string): Promise<ImportR
         const swatch = value.swatch && isValidSwatch(value.swatch) ? value.swatch : null
         const position = await nextValuePosition(attribute.id)
         const created = await createAttributeValue({ attributeId: attribute.id, label: value.label, slug, swatch, position })
-        match = { id: created.id, attributeId: attribute.id, label: value.label, slug, swatch, position }
+        // No swatch size: shop-variations has no such field to import one from, and
+        // an owner sets it on the attributes screen afterwards if the swatch needs it.
+        match = { id: created.id, attributeId: attribute.id, label: value.label, slug, swatch, swatchSize: null, position }
         attribute.values.push(match)
         valuesCreated++
       }

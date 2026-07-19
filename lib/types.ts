@@ -29,6 +29,13 @@ export function isValidSwatch(value: string): boolean {
   return isHexSwatch(value) || isImageSwatch(value)
 }
 
+// A picture swatch's real-world size is written as the owner has it - "20cm",
+// "200mm", "0.2m" or a bare number - so the cap is only there to stop a paste of
+// something that was never a measurement. Whoever draws with it does the parsing;
+// nothing here tries to normalise the units, since a value that fails to parse is
+// "uncalibrated", not invalid.
+export const SWATCH_SIZE_MAX_LENGTH = 40
+
 // A folder attributes can be sorted into. Admin-side organisation only - the
 // storefront filter never reads a group, which is why there is no
 // `showInFilters` here to go stale against the attribute's own.
@@ -60,6 +67,9 @@ export type PatAttributeValue = {
   label: string
   slug: string
   swatch: string | null
+  // The real-world size of the picture swatch above, as typed. Null on a value
+  // with no picture, and on every value made before the field existed.
+  swatchSize: string | null
   position: number
 }
 
