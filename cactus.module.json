@@ -1,26 +1,71 @@
 {
   "name": "product-attributes-for-shop",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "tablePrefix": "pat_",
   "description": "Filterable product attributes for the shop: define attributes like Material or Colour, put a set of them on each product, set a value per variant, hide any from the public filters, and let shoppers narrow the catalogue by the rest.",
   "requiresCoreVersion": "0.5.493",
   "requiresModules": [
-    { "name": "shop", "minVersion": "0.1.65" }
+    {
+      "name": "shop",
+      "minVersion": "0.1.65"
+    }
   ],
   "permissions": [],
   "navGroupLabel": "Shop",
   "navEntries": [
-    { "label": "Product attributes", "path": "/m/product-attributes-for-shop/attributes", "icon": "<path d=\"M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z\"/><circle cx=\"7\" cy=\"7\" r=\"1.5\"/>", "permission": "shop.products" }
+    {
+      "label": "Product attributes",
+      "path": "/m/product-attributes-for-shop/attributes",
+      "icon": "<path d=\"M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z\"/><circle cx=\"7\" cy=\"7\" r=\"1.5\"/>",
+      "permission": "shop.products"
+    }
   ],
   "requiredEnvVars": [],
   "cookieCategories": [],
   "extensionPoints": [
-    { "point": "shop.product-editor-sections", "id": "product-attributes-inline", "label": "Attributes", "order": 55, "permission": "shop.products", "import": "./components/admin/ProductAttributesSection", "component": "ProductAttributesSection" },
-    { "point": "shop-variations.variant-field-provider", "id": "product-attributes", "permission": "shop.products", "import": "./lib/variant-field-provider", "component": "productAttributesVariantFieldProvider" },
-    { "point": "core.media-reference-rewriters", "id": "product-attributes-for-shop", "import": "./lib/media-reference-rewriter", "component": "productAttributesMediaReferenceRewriter" }
+    {
+      "point": "shop.product-editor-sections",
+      "id": "product-attributes-inline",
+      "label": "Attributes",
+      "order": 55,
+      "permission": "shop.products",
+      "import": "./components/admin/ProductAttributesSection",
+      "component": "ProductAttributesSection"
+    },
+    {
+      "point": "shop-variations.variant-field-provider",
+      "id": "product-attributes",
+      "permission": "shop.products",
+      "import": "./lib/variant-field-provider",
+      "component": "productAttributesVariantFieldProvider"
+    },
+    {
+      "point": "core.media-reference-rewriters",
+      "id": "product-attributes-for-shop",
+      "import": "./lib/media-reference-rewriter",
+      "component": "productAttributesMediaReferenceRewriter"
+    },
+    {
+      "point": "shop-variations.option-source",
+      "id": "product-attributes",
+      "permission": "shop.products",
+      "import": "./lib/option-source-provider",
+      "component": "productAttributesOptionSourceProvider"
+    }
   ],
   "puckBlocks": [
-    { "type": "ShopAttributeFilterGrid", "import": "./components/puck/ShopAttributeFilterGrid", "component": "shopAttributeFilterGridPuckComponent", "rscComponent": "shopAttributeFilterGridPuckRscComponent", "rscImport": "./components/puck/ShopAttributeFilterGrid.rsc", "layoutTypes": ["shopIndex", "shopCategory", "shopCollection"] }
+    {
+      "type": "ShopAttributeFilterGrid",
+      "import": "./components/puck/ShopAttributeFilterGrid",
+      "component": "shopAttributeFilterGridPuckComponent",
+      "rscComponent": "shopAttributeFilterGridPuckRscComponent",
+      "rscImport": "./components/puck/ShopAttributeFilterGrid.rsc",
+      "layoutTypes": [
+        "shopIndex",
+        "shopCategory",
+        "shopCollection"
+      ]
+    }
   ],
   "memberExtensions": {
     "activityTypes": [],
