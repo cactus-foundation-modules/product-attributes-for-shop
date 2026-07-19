@@ -121,3 +121,80 @@ export async function getVariantOptionValueMap(productId: string): Promise<Map<s
 export function importedValueSlug(label: string): string {
   return slugify(label) || 'value'
 }
+
+// This module's id at the `shop-variations.option-source` point, as declared in
+// its own manifest. Options built from an attribute store it in source_provider,
+// so it is what tells our options apart from another provider's.
+const OPTION_SOURCE_PROVIDER_ID = 'product-attributes'
+
+export type SourcedOptionRenameResult = {
+  /** Options renamed to follow the attribute. */
+  renamed: number
+  /**
+   * Products where an option could not follow, because another option there is
+   * already called that. Named so the caller can say which, rather than leaving
+   * the owner to notice a stale name later.
+   */
+  blocked: string[]
+}
+
+/**
+ * Bring every option built from this attribute into line with its new name.
+ *
+ * Options with `name_overridden` are deliberately left alone: an owner who
+ * renamed one to "Seat colour" so it could sit beside "Back colour" off the same
+ * attribute meant it, and having a rename here silently undo that would collapse
+ * the two back into a clash.
+ *
+ * A rename is also skipped where the product already has an option by the new
+ * name. Option names are unique per product - the importer matches on them and
+ * two identically named choosers tell a customer nothing - so the alternative is
+ * a constraint violation that would fail the whole attribute rename.
+ */
+export async function renameSourcedOptions(attributeId: string, name: string): Promise<SourcedOptionRenameResult> {
+  if (!(await hasVariationsTables())) return { renamed: 0, blocked: [] }
+
+  const clashes = await prisma.$queryRaw<{ product_name: string }[]>`
+    SELECT DISTINCT p."name" AS "product_name"
+    FROM "svr_options" o
+    JOIN "shp_products" p ON p."id" = o."product_id"
+    WHERE o."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
+      AND o."source_ref" = ${attributeId}
+      AND o."name_overridden" = false
+      AND lower(o."name") <> lower(${name})
+      AND EXISTS (
+        SELECT 1 FROM "svr_options" sib
+        WHERE sib."product_id" = o."product_id"
+          AND sib."id" <> o."id"
+          AND lower(sib."name") = lower(${name})
+      )
+  `
+
+  // At most one option per product may take the name, hence the DISTINCT ON.
+  // Two non-overridden options off one attribute on one product cannot be made
+  // through the UI - naming the second one differently is what sets its override
+  // - but nothing at the database level forbids it, and without this guard the
+  // statement would rename both to the same thing in a single snapshot and quietly
+  // break the per-product name uniqueness the importer matches on.
+  const renamed = await prisma.$executeRaw`
+    UPDATE "svr_options" o
+    SET "name" = ${name}
+    WHERE o."id" IN (
+      SELECT DISTINCT ON (cand."product_id") cand."id"
+      FROM "svr_options" cand
+      WHERE cand."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
+        AND cand."source_ref" = ${attributeId}
+        AND cand."name_overridden" = false
+        AND cand."name" <> ${name}
+      ORDER BY cand."product_id", cand."position", cand."id"
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM "svr_options" sib
+      WHERE sib."product_id" = o."product_id"
+        AND sib."id" <> o."id"
+        AND lower(sib."name") = lower(${name})
+    )
+  `
+
+  return { renamed, blocked: clashes.map((r) => r.product_name) }
+}

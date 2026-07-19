@@ -11,6 +11,7 @@ import {
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 import { getAttributeGroup } from '@/modules/product-attributes-for-shop/lib/db/groups'
 import { refileAttributeSwatches } from '@/modules/product-attributes-for-shop/lib/media-folder'
+import { renameSourcedOptions } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
 
 const PatchBody = z.object({
   name: z.string().min(1).max(80).optional(),
@@ -73,7 +74,21 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   // rename because that has quietly stranded pictures since day one.
   if (groupId !== undefined || name !== undefined) await refileAttributeSwatches(id)
 
-  return NextResponse.json({ ok: true })
+  // Carry the new name through to every variation option built from this
+  // attribute, so one rename here is the whole job rather than the first of
+  // however many products use it. Options deliberately renamed on their product
+  // keep their own name - see renameSourcedOptions.
+  //
+  // A no-op when shop-variations is not installed, which is the usual case for a
+  // plain filtered catalogue.
+  const propagated = name !== undefined ? await renameSourcedOptions(id, name) : null
+
+  return NextResponse.json({
+    ok: true,
+    ...(propagated && (propagated.renamed > 0 || propagated.blocked.length > 0)
+      ? { optionsRenamed: propagated.renamed, optionsBlocked: propagated.blocked }
+      : {}),
+  })
 }
 
 // Deleting an attribute cascades its values, which in turn cascades every

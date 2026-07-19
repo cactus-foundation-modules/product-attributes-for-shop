@@ -53,7 +53,11 @@ export function AttributesScreen() {
   // eslint-disable-next-line react-hooks/set-state-in-effect -- delegating to async helper; all setState calls are after awaits
   useEffect(() => { void load() }, [load])
 
-  async function send(url: string, method: string, body?: unknown): Promise<boolean> {
+  // Resolves to the response body on success and null on failure, so a caller
+  // that only wants "did it work" can still test it for truth while one that
+  // needs what came back - a rename reporting how many options followed it - can
+  // read the body without a second request.
+  async function send(url: string, method: string, body?: unknown): Promise<Record<string, unknown> | null> {
     setBusy(true)
     setError(null)
     try {
@@ -65,13 +69,14 @@ export function AttributesScreen() {
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         setError(data.error ?? 'Something went wrong.')
-        return false
+        return null
       }
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
       await load()
-      return true
+      return data
     } catch {
       setError('Something went wrong.')
-      return false
+      return null
     } finally {
       setBusy(false)
     }
@@ -303,7 +308,7 @@ function GroupHeader({
   group: PatAttributeGroup | null
   count: number
   busy: boolean
-  send: (url: string, method: string, body?: unknown) => Promise<boolean>
+  send: (url: string, method: string, body?: unknown) => Promise<Record<string, unknown> | null>
   groupIndex: number
   groupCount: number
   onMove: (index: number, delta: number) => Promise<void>
@@ -364,7 +369,7 @@ function AttributeCard({
   attribute: PatAttributeWithValues
   groups: PatAttributeGroup[]
   busy: boolean
-  send: (url: string, method: string, body?: unknown) => Promise<boolean>
+  send: (url: string, method: string, body?: unknown) => Promise<Record<string, unknown> | null>
   canMoveUp: boolean
   canMoveDown: boolean
   onMove: (delta: number) => Promise<void>
@@ -372,6 +377,9 @@ function AttributeCard({
   const [newValue, setNewValue] = useState('')
   const [newSwatch, setNewSwatch] = useState('#888888')
   const [newImage, setNewImage] = useState<string | null>(null)
+  // What a rename did beyond this screen. Cleared on the next one so it never
+  // describes a rename other than the last.
+  const [renameNote, setRenameNote] = useState<string | null>(null)
   const base = '/api/m/product-attributes-for-shop/admin'
   const isSwatch = attribute.controlType === 'SWATCH'
   const isImage = attribute.controlType === 'IMAGE'
@@ -386,6 +394,23 @@ function AttributeCard({
     // The picture is cleared alongside the label: it belonged to the value just
     // added, and leaving it loaded would quietly give the next value the same one.
     if (ok) { setNewValue(''); setNewImage(null) }
+  }
+
+  // A rename can reach further than this screen, so say how far. Options that
+  // kept a name of their own are not mentioned: they were meant to differ, and
+  // listing them every time would read as a problem rather than a choice.
+  async function onRename(name: string) {
+    setRenameNote(null)
+    const result = await send(`${base}/attributes/${attribute.id}`, 'PATCH', { name })
+    if (!result) return
+    const renamed = typeof result.optionsRenamed === 'number' ? result.optionsRenamed : 0
+    const blocked = Array.isArray(result.optionsBlocked) ? (result.optionsBlocked as string[]) : []
+    const parts: string[] = []
+    if (renamed > 0) parts.push(`Renamed on ${renamed} variation option${renamed === 1 ? '' : 's'}.`)
+    if (blocked.length > 0) {
+      parts.push(`Left alone on ${blocked.join(', ')} - there is already an option called "${name}" there.`)
+    }
+    setRenameNote(parts.length > 0 ? parts.join(' ') : null)
   }
 
   return (
@@ -403,6 +428,11 @@ function AttributeCard({
               Imported from the &ldquo;{attribute.sourceOptionName}&rdquo; variation option.
             </p>
           )}
+          {renameNote && (
+            <p role="status" style={{ margin: '0.25rem 0 0', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+              {renameNote}
+            </p>
+          )}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <MoveButtons
@@ -412,6 +442,19 @@ function AttributeCard({
             busy={busy}
             onMove={(delta) => void onMove(delta)}
           />
+          {/* Matches the group rename beside it. The new name carries through to
+              every variation option built from this attribute, so what comes back
+              is worth reporting - see onRename. */}
+          <button
+            className="btn btn-secondary btn-sm"
+            disabled={busy}
+            onClick={() => {
+              const next = prompt('Rename this attribute to:', attribute.name)?.trim()
+              if (next && next !== attribute.name) void onRename(next)
+            }}
+          >
+            Rename
+          </button>
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.875rem' }}>
             <span style={{ color: 'var(--color-text-muted)' }}>Group</span>
             <select
