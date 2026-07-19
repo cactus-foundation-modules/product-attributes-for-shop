@@ -3,6 +3,7 @@ import { getOrCreateFolderByPath, cleanFolderName, sanitizeFolderSegment, moveOr
 import { getAttribute, listAttributeSwatches, updateAttributeValue } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 import { getAttributeGroup, listAttributeIdsInGroup } from '@/modules/product-attributes-for-shop/lib/db/groups'
 import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
+import { syncSourcedOptionValues } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
 
 /**
  * Where an image-swatch's pictures belong in the library: shop / attributes /
@@ -95,6 +96,10 @@ export async function fileSwatchImage(attributeId: string, valueId: string, swat
     const updated = await moveOrRenameMedia(media.id, { targetFolderId: folderId, collision: 'suffix' })
     if (updated && updated.url !== swatchUrl) {
       await updateAttributeValue(valueId, { swatch: updated.url })
+      // Variation options built from this value hold their own copy of the url,
+      // so a move that rewrites it has to land there too - otherwise every
+      // product option copied from this attribute keeps serving the old url.
+      await syncSourcedOptionValues(valueId, { swatch: updated.url })
     }
   } catch (err) {
     // A picture failing to file (provider hiccup, missing blob) must not fail the

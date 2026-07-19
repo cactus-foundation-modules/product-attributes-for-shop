@@ -52,6 +52,18 @@ async function groupNameMap(): Promise<Map<string, string>> {
   return new Map(groups.map((g) => [g.id, g.name]))
 }
 
+// The attributes screen's running order: each group's attributes together, in
+// the owner's group order, with the ungrouped pile last. The picker gathers
+// consecutive same-heading runs into one section, so attributes arriving in
+// flat position order would interleave grouped and ungrouped rows and the same
+// group heading would be drawn once per run - three "Dynamic" sections for one
+// "Dynamic" group.
+function inScreenOrder<T extends { groupId: string | null }>(attributes: T[], groupIds: string[]): T[] {
+  const rank = new Map(groupIds.map((id, index) => [id, index]))
+  const rankOf = (a: T) => (a.groupId !== null && rank.has(a.groupId) ? rank.get(a.groupId)! : groupIds.length)
+  return [...attributes].sort((a, b) => rankOf(a) - rankOf(b))
+}
+
 export const productAttributesOptionSourceProvider = {
   label: 'Attributes',
 
@@ -59,8 +71,9 @@ export const productAttributesOptionSourceProvider = {
   // hidden from the public filters are still offered: whether a shopper can
   // filter by Colour has no bearing on whether a product can be sold in colours.
   async listSources(): Promise<OptionSource[]> {
-    const [attributes, groupNames] = await Promise.all([listAttributes(), groupNameMap()])
-    return attributes.map((a) => toSource(a, groupNames))
+    const [attributes, groups] = await Promise.all([listAttributes(), listAttributeGroups()])
+    const groupNames = new Map(groups.map((g) => [g.id, g.name]))
+    return inScreenOrder(attributes, groups.map((g) => g.id)).map((a) => toSource(a, groupNames))
   },
 
   // One attribute, for a refresh. Null once it has been deleted, which the

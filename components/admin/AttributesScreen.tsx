@@ -28,6 +28,7 @@ export function AttributesScreen() {
   const [newGroupId, setNewGroupId] = useState('')
   const [newGroupName, setNewGroupName] = useState('')
   const [busy, setBusy] = useState(false)
+  const [tidied, setTidied] = useState<string | null>(null)
 
   // Falls back to "No group" if the chosen folder has since been deleted, so the
   // picker never shows one thing while the Add button sends another.
@@ -101,6 +102,12 @@ export function AttributesScreen() {
     if (!name) return
     const ok = await send('/api/m/product-attributes-for-shop/admin/groups', 'POST', { name })
     if (ok) setNewGroupName('')
+  }
+
+  async function tidySwatches() {
+    setTidied(null)
+    const ok = await send('/api/m/product-attributes-for-shop/admin/refile-swatches', 'POST')
+    if (ok) setTidied('Done - every picture swatch is filed where it belongs.')
   }
 
   // One section per group, in the owner's order, then whatever is still loose.
@@ -211,6 +218,17 @@ export function AttributesScreen() {
           />
           <button className="btn btn-secondary" disabled={busy || !newGroupName.trim()} onClick={() => void addGroup()}>Add group</button>
         </div>
+      </section>
+
+      <section style={{ border: '1px solid var(--color-border)', borderRadius: 12, padding: '1rem 1.25rem', background: 'var(--color-surface)', marginBottom: '1.5rem' }}>
+        <h2 style={{ fontSize: '0.9375rem', margin: '0 0 0.75rem' }}>Tidy picture folders</h2>
+        <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+          Files every attribute&apos;s swatch pictures into its own folder in the media library
+          (Shop / Attributes), and points anything using them at the new home. Safe to press
+          any time - pictures already in the right place stay put.
+        </p>
+        <button className="btn btn-secondary" disabled={busy} onClick={() => void tidySwatches()}>Tidy picture folders</button>
+        {tidied && <span style={{ marginLeft: '0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>{tidied}</span>}
       </section>
 
       {!loaded ? null : attributes.length === 0 && groups.length === 0 ? (
