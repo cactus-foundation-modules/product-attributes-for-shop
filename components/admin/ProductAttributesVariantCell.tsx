@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 
-// The Variations-tab cell for one attribute on one variant. shop-variations
-// renders this once per (variant, use-for-variations attribute); the column key
-// is the attribute id. It saves itself the moment the shopper's choice changes,
-// like every other contributed variant column - the Variations grid's own Save
-// button carries nothing of ours.
+// The Variations-tab cell for one attribute column on one variant.
+// shop-variations renders this once per (variant, use-for-variations helping);
+// the column key is the ASSIGNMENT id, so a product using Finish for both its
+// main and edge surfaces gets two independent cells rather than two views of one.
+// It saves itself the moment the shopper's choice changes, like every other
+// contributed variant column - the Variations grid's own Save button carries
+// nothing of ours.
 //
 // Props are declared locally, not imported from shop-variations: that module is
 // an optional companion whose files do not exist on an install without it, so a
@@ -21,7 +23,12 @@ type CellProps = {
 
 const BASE = '/api/m/product-attributes-for-shop/admin'
 
-type Col = { attributeId: string; name: string; values: { id: string; label: string; swatch: string | null }[] }
+type Col = {
+  assignmentId: string
+  attributeId: string
+  name: string
+  values: { id: string; label: string; swatch: string | null }[]
+}
 type VariationData = { columns: Col[]; values: Record<string, Record<string, string>> }
 type Entry = { data: VariationData | null; loading: boolean; error: boolean }
 
@@ -59,8 +66,10 @@ async function ensureLoaded(productId: string) {
   emit(productId)
 }
 
-// Splices a just-created value into the attribute's column so every cell in the
-// grid offers it straight away, not only the one that typed it.
+// Splices a just-created value into every column drawing on that attribute, so
+// the whole grid offers it straight away and not only the cell that typed it.
+// Matched on attribute rather than column on purpose: a new finish typed into the
+// edge column belongs to Finish, so the main column should offer it too.
 function addLocalColumnValue(productId: string, attributeId: string, value: { id: string; label: string; swatch: string | null }) {
   const current = getEntry(productId)
   if (!current.data) return
@@ -71,10 +80,10 @@ function addLocalColumnValue(productId: string, attributeId: string, value: { id
   emit(productId)
 }
 
-function setLocalValue(productId: string, childId: string, attributeId: string, valueId: string) {
+function setLocalValue(productId: string, childId: string, assignmentId: string, valueId: string) {
   const current = getEntry(productId)
   if (!current.data) return
-  const values = { ...current.data.values, [childId]: { ...(current.data.values[childId] ?? {}), [attributeId]: valueId } }
+  const values = { ...current.data.values, [childId]: { ...(current.data.values[childId] ?? {}), [assignmentId]: valueId } }
   store.set(productId, { ...current, data: { ...current.data, values } })
   emit(productId)
 }
@@ -117,6 +126,12 @@ export function ProductAttributesVariantCell({ productId, childProductId, column
   const [typing, setTyping] = useState(false)
   const [draft, setDraft] = useState('')
 
+  // The column key is the assignment. Its attribute is looked up here rather than
+  // taken from the key, because adding a value targets the attribute while saving
+  // a choice targets the helping, and on a twice-used attribute those differ.
+  const col = entry.data?.columns.find((c) => c.assignmentId === columnKey)
+  const attributeId = col?.attributeId ?? ''
+
   const onChange = useCallback(async (valueId: string) => {
     setSaving(true)
     setLocalValue(productId, childProductId, columnKey, valueId)
@@ -124,7 +139,7 @@ export function ProductAttributesVariantCell({ productId, childProductId, column
       await fetch(`${BASE}/products/${productId}/variant-attribute-value`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ childProductId, attributeId: columnKey, valueId: valueId || null }),
+        body: JSON.stringify({ childProductId, assignmentId: columnKey, valueId: valueId || null }),
       })
     } finally {
       setSaving(false)
@@ -137,10 +152,10 @@ export function ProductAttributesVariantCell({ productId, childProductId, column
   // already exists is reused rather than duplicated.
   const createAndSelect = useCallback(async () => {
     const label = draft.trim()
-    if (!label) { setTyping(false); setDraft(''); return }
+    if (!label || !attributeId) { setTyping(false); setDraft(''); return }
     setSaving(true)
     try {
-      const res = await fetch(`${BASE}/attributes/${columnKey}/values`, {
+      const res = await fetch(`${BASE}/attributes/${attributeId}/values`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label, reuseExisting: true }),
@@ -148,17 +163,16 @@ export function ProductAttributesVariantCell({ productId, childProductId, column
       if (!res.ok) return
       const payload = await res.json()
       const value = payload.value as { id: string; label: string; swatch: string | null }
-      addLocalColumnValue(productId, columnKey, { id: value.id, label: value.label, swatch: value.swatch })
+      addLocalColumnValue(productId, attributeId, { id: value.id, label: value.label, swatch: value.swatch })
       setTyping(false)
       setDraft('')
       await onChange(value.id)
     } finally {
       setSaving(false)
     }
-  }, [draft, productId, columnKey, onChange])
+  }, [draft, productId, attributeId, onChange])
 
   if (entry.error) return <span style={muted} title="Could not load attribute values">—</span>
-  const col = entry.data?.columns.find((c) => c.attributeId === columnKey)
   if (!entry.data || !col) return <span style={muted}>…</span>
   const current = entry.data.values[childProductId]?.[columnKey] ?? ''
 

@@ -387,14 +387,15 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
 
                       <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', marginBottom: h.useForVariations ? 0 : '0.625rem' }}>
                         {variationsInstalled && (
-                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.8125rem', opacity: repeat ? 0.55 : 1 }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.8125rem' }}>
                             <input
                               type="checkbox"
                               checked={h.useForVariations}
-                              // The Variations tab shows one column per attribute,
-                              // so a second helping of the same one has no column
-                              // to call its own.
-                              disabled={repeat}
+                              // Every helping gets a column of its own on the
+                              // Variations tab, so an attribute used twice can be
+                              // set per variant twice - a main finish and an edge
+                              // finish off one Finish. The name each goes by is
+                              // what heads the two columns apart.
                               onChange={(e) => updateHelping(h.key, (prev) => ({
                                 ...prev,
                                 useForVariations: e.target.checked,
@@ -404,7 +405,11 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                               }))}
                             />
                             Use for variations
-                            {repeat && <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>(not while it is used more than once)</span>}
+                            {repeat && h.useForVariations && (
+                              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                                (its own column, headed {name})
+                              </span>
+                            )}
                           </label>
                         )}
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.8125rem' }}>

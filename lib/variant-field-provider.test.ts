@@ -7,13 +7,16 @@ vi.mock('@/modules/product-attributes-for-shop/components/admin/ProductAttribute
   ProductAttributesVariantCell: () => null,
 }))
 
+// One attribute standing up as two columns - the case the whole assignment key
+// exists for. Both draw on attr1; only the assignment id tells them apart.
 const listVariationColumns = vi.fn(async (_id: string): Promise<PatVariationColumn[]> => [
-  { attributeId: 'attr1', name: 'Colour', position: 0, values: [] },
+  { assignmentId: 'asg1', attributeId: 'attr1', name: 'Main finish', position: 0, values: [] },
+  { assignmentId: 'asg2', attributeId: 'attr1', name: 'Edge finish', position: 1, values: [] },
 ])
 const getVariantAttributeValues = vi.fn(
   async (_p: string, _c: string[]): Promise<Record<string, Record<string, { valueId: string; label: string }>>> => ({}),
 )
-const setVariantAttributeValue = vi.fn(async (_c: string, _a: string, _v: string | null) => {})
+const setVariantAttributeValue = vi.fn(async (_c: string, _assignmentId: string, _v: string | null) => {})
 const ensureAttributeValueByLabel = vi.fn(async (_a: string, label: string): Promise<string | null> => `v-${label.toLowerCase()}`)
 
 vi.mock('@/modules/product-attributes-for-shop/lib/db/membership', () => ({
@@ -38,7 +41,7 @@ beforeEach(() => {
 
 describe('productAttributesVariantFieldProvider import batching', () => {
   it('beginImport preloads all children in one read', async () => {
-    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { attr1: { valueId: 'v-red', label: 'Red' } } })
+    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { asg1: { valueId: 'v-red', label: 'Red' } } })
     const parent = nextParent()
     await provider.beginImport!(parent, ['c1', 'c2'])
     expect(getVariantAttributeValues).toHaveBeenCalledTimes(1)
@@ -46,43 +49,43 @@ describe('productAttributesVariantFieldProvider import batching', () => {
   })
 
   it('skips the write when the resolved value is unchanged', async () => {
-    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { attr1: { valueId: 'v-red', label: 'Red' } } })
+    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { asg1: { valueId: 'v-red', label: 'Red' } } })
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { Colour: 'Red' }, ctx)
+    await provider.applyImportedRow(parent, 'c1', { 'Main finish': 'Red' }, ctx)
     expect(setVariantAttributeValue).not.toHaveBeenCalled()
   })
 
   it('writes when the resolved value differs', async () => {
-    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { attr1: { valueId: 'v-red', label: 'Red' } } })
+    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { asg1: { valueId: 'v-red', label: 'Red' } } })
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { Colour: 'Blue' }, ctx)
+    await provider.applyImportedRow(parent, 'c1', { 'Main finish': 'Blue' }, ctx)
     expect(setVariantAttributeValue).toHaveBeenCalledTimes(1)
-    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'attr1', 'v-blue')
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg1', 'v-blue')
   })
 
   it('writes for a brand-new variant absent from the preload (context miss)', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({}) // c1 created mid-import
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, [])
-    await provider.applyImportedRow(parent, 'fresh', { Colour: 'Green' }, ctx)
-    expect(setVariantAttributeValue).toHaveBeenCalledWith('fresh', 'attr1', 'v-green')
+    await provider.applyImportedRow(parent, 'fresh', { 'Main finish': 'Green' }, ctx)
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('fresh', 'asg1', 'v-green')
   })
 
   it('clears the value when a present cell is empty and one was stored', async () => {
-    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { attr1: { valueId: 'v-red', label: 'Red' } } })
+    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { asg1: { valueId: 'v-red', label: 'Red' } } })
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { Colour: '' }, ctx)
-    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'attr1', null)
+    await provider.applyImportedRow(parent, 'c1', { 'Main finish': '' }, ctx)
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg1', null)
   })
 
   it('no write when an empty cell matches an already-empty value', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { Colour: '' }, ctx)
+    await provider.applyImportedRow(parent, 'c1', { 'Main finish': '' }, ctx)
     expect(setVariantAttributeValue).not.toHaveBeenCalled()
   })
 
@@ -90,8 +93,8 @@ describe('productAttributesVariantFieldProvider import batching', () => {
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, [])
-    await provider.applyImportedRow(parent, 'a', { Colour: 'Red' }, ctx)
-    await provider.applyImportedRow(parent, 'b', { Colour: 'Red' }, ctx)
+    await provider.applyImportedRow(parent, 'a', { 'Main finish': 'Red' }, ctx)
+    await provider.applyImportedRow(parent, 'b', { 'Main finish': 'Red' }, ctx)
     expect(ensureAttributeValueByLabel).toHaveBeenCalledTimes(1)
     expect(setVariantAttributeValue).toHaveBeenCalledTimes(2)
   })
@@ -102,5 +105,50 @@ describe('productAttributesVariantFieldProvider import batching', () => {
     const ctx = await provider.beginImport!(parent, [])
     await provider.applyImportedRow(parent, 'c1', { 'Some Other Column': 'x' }, ctx)
     expect(setVariantAttributeValue).not.toHaveBeenCalled()
+  })
+})
+
+// One attribute, two columns. Before the column key became the assignment id
+// these all collapsed into one another: the second write wiped the first, and a
+// value stored under one heading read back under both.
+describe('an attribute used for variations more than once', () => {
+  it('gives each helping its own column key', async () => {
+    const cols = await provider.listColumns(nextParent())
+    expect(cols).toEqual([
+      { key: 'asg1', label: 'Main finish', order: 0 },
+      { key: 'asg2', label: 'Edge finish', order: 1 },
+    ])
+  })
+
+  it('writes each column against its own helping', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    await provider.applyImportedRow(parent, 'c1', { 'Main finish': 'Oak', 'Edge finish': 'White' }, ctx)
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg1', 'v-oak')
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg2', 'v-white')
+  })
+
+  it('keeps the two apart when they hold the same value', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    await provider.applyImportedRow(parent, 'c1', { 'Main finish': 'Oak', 'Edge finish': 'Oak' }, ctx)
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg1', 'v-oak')
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg2', 'v-oak')
+    // Same vocabulary, so the label is resolved once for both columns.
+    expect(ensureAttributeValueByLabel).toHaveBeenCalledTimes(1)
+    expect(ensureAttributeValueByLabel).toHaveBeenCalledWith('attr1', 'Oak')
+  })
+
+  it('leaves the other column alone when only one changes', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({
+      'c1': { asg1: { valueId: 'v-oak', label: 'Oak' }, asg2: { valueId: 'v-white', label: 'White' } },
+    })
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    await provider.applyImportedRow(parent, 'c1', { 'Main finish': 'Oak', 'Edge finish': 'Walnut' }, ctx)
+    expect(setVariantAttributeValue).toHaveBeenCalledTimes(1)
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg2', 'v-walnut')
   })
 })

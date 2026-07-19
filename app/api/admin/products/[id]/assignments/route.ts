@@ -74,17 +74,11 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     seen.add(key)
   }
 
-  // An attribute used more than once cannot also be a variations column: that
-  // column is per attribute, so two helpings would both claim it and the value
-  // set on one would appear under the other.
-  const helpingCount = new Map<string, number>()
-  for (const m of membership) helpingCount.set(m.attributeId, (helpingCount.get(m.attributeId) ?? 0) + 1)
-  if (membership.some((m) => m.useForVariations && (helpingCount.get(m.attributeId) ?? 0) > 1)) {
-    return NextResponse.json(
-      { error: 'An attribute used more than once on a product cannot also be set per variant. Use one helping of it, or turn that off.' },
-      { status: 409 },
-    )
-  }
+  // An attribute used more than once may now be a variations column more than
+  // once too: each helping is its own column, keyed by assignment, so a table can
+  // have a main finish and an edge finish off one Finish vocabulary. The name
+  // check above is what keeps the two columns (and their CSV headers) apart, so
+  // there is nothing further to refuse here.
 
   // Save the set, then clear assignments for any attribute dropped from it, so a
   // removed attribute stops dragging the product into its filter. Only genuinely

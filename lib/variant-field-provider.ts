@@ -33,7 +33,7 @@ async function columnsFor(productId: string): Promise<PatVariationColumn[]> {
 // The context beginImport hands to each applyImportedRow of one parent's import:
 // every child's current variation-attribute value, preloaded once, plus a cache
 // of labels already resolved to value ids during this import. `current` is keyed
-// child id -> attribute id -> resolved value id (null = none). A child absent from
+// child id -> assignment id -> resolved value id (null = none). A child absent from
 // the map is a variant created mid-import: its current state is empty, so every
 // non-empty cell writes.
 type AttrImportCtx = {
@@ -45,26 +45,29 @@ function isAttrImportCtx(ctx: unknown): ctx is AttrImportCtx {
   return !!ctx && typeof ctx === 'object' && 'current' in ctx && 'labelCache' in ctx
 }
 
-// The current value id for a (child, attribute), from the preloaded context. A
+// The current value id for a (child, helping), from the preloaded context. A
 // context miss - no context at all, or a child not in the snapshot - resolves to
 // null so a new variant is treated as having no value yet and gets written.
-export function currentValueId(ctx: unknown, childProductId: string, attributeId: string): string | null {
+export function currentValueId(ctx: unknown, childProductId: string, assignmentId: string): string | null {
   if (!isAttrImportCtx(ctx)) return null
-  return ctx.current.get(childProductId)?.get(attributeId) ?? null
+  return ctx.current.get(childProductId)?.get(assignmentId) ?? null
 }
 
 export const productAttributesVariantFieldProvider = {
+  // The column key is the assignment, not the attribute: a product using Finish
+  // for both its main and edge surfaces contributes two columns off one
+  // attribute, and only the assignment tells them apart.
   async listColumns(productId: string) {
     const cols = await listVariationColumns(productId)
-    return cols.map((c) => ({ key: c.attributeId, label: c.name, order: c.position }))
+    return cols.map((c) => ({ key: c.assignmentId, label: c.name, order: c.position }))
   },
 
   async getValues(productId: string, childProductIds: string[]) {
     const byChild = await getVariantAttributeValues(productId, childProductIds)
     const out: Record<string, Record<string, string>> = {}
-    for (const [childId, byAttr] of Object.entries(byChild)) {
+    for (const [childId, byAssignment] of Object.entries(byChild)) {
       out[childId] = {}
-      for (const [attributeId, v] of Object.entries(byAttr)) out[childId][attributeId] = v.label
+      for (const [assignmentId, v] of Object.entries(byAssignment)) out[childId][assignmentId] = v.label
     }
     return out
   },
@@ -74,10 +77,10 @@ export const productAttributesVariantFieldProvider = {
   async beginImport(productId: string, childProductIds: string[]): Promise<AttrImportCtx> {
     const byChild = await getVariantAttributeValues(productId, childProductIds)
     const current = new Map<string, Map<string, string | null>>()
-    for (const [childId, byAttr] of Object.entries(byChild)) {
-      const attrMap = new Map<string, string | null>()
-      for (const [attributeId, v] of Object.entries(byAttr)) attrMap.set(attributeId, v.valueId)
-      current.set(childId, attrMap)
+    for (const [childId, byAssignment] of Object.entries(byChild)) {
+      const assignmentMap = new Map<string, string | null>()
+      for (const [assignmentId, v] of Object.entries(byAssignment)) assignmentMap.set(assignmentId, v.valueId)
+      current.set(childId, assignmentMap)
     }
     return { current, labelCache: new Map() }
   },
@@ -95,6 +98,10 @@ export const productAttributesVariantFieldProvider = {
       const cellValue = (rowByLower.get(key) ?? '').trim()
       // Resolve the wanted value id, caching each label lookup within this import so
       // the same label across many rows is only ensured once.
+      // The label is resolved against the ATTRIBUTE - two helpings of one
+      // attribute draw on the same vocabulary, so "Oak" typed under the edge
+      // column is the same value the main column offers, and the cache is keyed
+      // to match. Where it is stored, though, is the helping's business.
       let valueId: string | null = null
       if (cellValue) {
         const cacheKey = `${col.attributeId}|${cellValue.toLowerCase()}`
@@ -108,14 +115,14 @@ export const productAttributesVariantFieldProvider = {
       // Only write when the resolved value actually differs from what is stored -
       // the change detection the blind per-row write used to skip. A context miss
       // (new variant) reads as null, so its first non-empty value still writes.
-      if (valueId === currentValueId(importCtx, childProductId, col.attributeId)) continue
-      await setVariantAttributeValue(childProductId, col.attributeId, valueId)
+      if (valueId === currentValueId(importCtx, childProductId, col.assignmentId)) continue
+      await setVariantAttributeValue(childProductId, col.assignmentId, valueId)
       // Keep the context current so a later row for the same child (a duplicated
       // combination) sees this write and does not repeat it.
       if (importCtx) {
-        const attrMap = importCtx.current.get(childProductId) ?? new Map<string, string | null>()
-        attrMap.set(col.attributeId, valueId)
-        importCtx.current.set(childProductId, attrMap)
+        const byAssignment = importCtx.current.get(childProductId) ?? new Map<string, string | null>()
+        byAssignment.set(col.assignmentId, valueId)
+        importCtx.current.set(childProductId, byAssignment)
       }
     }
   },

@@ -103,9 +103,16 @@ export type PatProductAttribute = {
   showInFilters: boolean
 }
 
-// A "use for variations" attribute as the Variations-tab column needs it: the
-// attribute and its selectable values, in display order.
+// A "use for variations" helping as the Variations-tab column needs it: the
+// heading it goes by and the values it offers, in display order.
+//
+// The column belongs to the HELPING, not the attribute. One product can put the
+// same attribute up as two columns - "Main finish" and "Edge finish" off one
+// Finish vocabulary - so `assignmentId` is what identifies a column and what a
+// per-variant value is stored against. `attributeId` comes along because the
+// values, and any new one typed into a cell, still belong to the attribute.
 export type PatVariationColumn = {
+  assignmentId: string
   attributeId: string
   name: string
   position: number

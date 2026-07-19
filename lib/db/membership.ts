@@ -93,94 +93,127 @@ export async function setProductAttributes(
   })
 }
 
-// Upserts a single membership row without disturbing the rest of the set. Used by
-// the "Copy from variations" import so it can mark the attributes it touched as
-// used-for-variations without clearing anything the admin set by hand. Imported
-// helpings never carry a name of their own, so the un-named row for the attribute
-// is the one this matches - a renamed second helping is left alone.
+// Upserts a single membership row without disturbing the rest of the set, and
+// hands back the helping's id so the caller can file per-variant values against
+// it. Used by the "Copy from variations" import so it can mark the attributes it
+// touched as used-for-variations without clearing anything the admin set by hand.
+// Imported helpings never carry a name of their own, so the un-named row for the
+// attribute is the one this matches - a renamed second helping is left alone.
 export async function upsertProductAttribute(
   productId: string,
   row: { attributeId: string; useForVariations: boolean; showInFilters: boolean },
-): Promise<void> {
-  await prisma.$executeRaw`
+): Promise<string | null> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
     INSERT INTO "pat_product_attributes"
       ("product_id", "attribute_id", "name_override", "use_for_variations", "show_in_filters")
     SELECT ${productId}, a."id", ${null}, ${row.useForVariations}, ${row.showInFilters}
     FROM "pat_attributes" a WHERE a."id" = ${row.attributeId}
     ON CONFLICT ("product_id", "attribute_id", "name_override")
     DO UPDATE SET "use_for_variations" = EXCLUDED."use_for_variations"
+    RETURNING "id"
   `
+  return rows[0]?.id ?? null
 }
 
-// The product's use-for-variations attributes with their selectable values, in
+// The product's use-for-variations helpings with their selectable values, in
 // display order - the columns the Variations tab shows and the CSV carries.
+//
+// One column per helping, not per attribute: a product that puts Finish up twice
+// gets a "Main finish" column and an "Edge finish" one, each offering the same
+// values and each remembered separately per variant. The heading is the helping's
+// own name where it has one, which is also the CSV header, so the two columns
+// stay tellable apart in a sheet - the editor and the API both refuse to save two
+// helpings of an attribute under one name for exactly that reason.
 export async function listVariationColumns(productId: string): Promise<PatVariationColumn[]> {
   const rows = await prisma.$queryRaw<
-    { attribute_id: string; name: string; position: number; value_id: string | null; label: string | null; swatch: string | null }[]
+    {
+      assignment_id: string; attribute_id: string; name: string; position: number
+      value_id: string | null; label: string | null; swatch: string | null
+    }[]
   >`
-    SELECT a."id" AS "attribute_id", a."name", a."position",
+    SELECT ppa."id" AS "assignment_id", a."id" AS "attribute_id",
+           COALESCE(NULLIF(TRIM(ppa."name_override"), ''), a."name") AS "name",
+           ppa."position",
            av."id" AS "value_id", av."label", av."swatch"
     FROM "pat_product_attributes" ppa
     JOIN "pat_attributes" a ON a."id" = ppa."attribute_id"
     LEFT JOIN "pat_attribute_values" av ON av."attribute_id" = a."id"
     WHERE ppa."product_id" = ${productId} AND ppa."use_for_variations" = true
-    ORDER BY a."position" ASC, a."created_at" ASC, av."position" ASC, av."label" ASC
+    ORDER BY ppa."position" ASC, a."position" ASC, a."created_at" ASC, av."position" ASC, av."label" ASC
   `
-  const byAttr = new Map<string, PatVariationColumn>()
+  const byAssignment = new Map<string, PatVariationColumn>()
   for (const r of rows) {
-    let col = byAttr.get(r.attribute_id)
+    let col = byAssignment.get(r.assignment_id)
     if (!col) {
-      col = { attributeId: r.attribute_id, name: r.name, position: r.position, values: [] }
-      byAttr.set(r.attribute_id, col)
+      col = {
+        assignmentId: r.assignment_id,
+        attributeId: r.attribute_id,
+        name: r.name,
+        position: r.position,
+        values: [],
+      }
+      byAssignment.set(r.assignment_id, col)
     }
     if (r.value_id) col.values.push({ id: r.value_id, label: r.label ?? '', swatch: r.swatch })
   }
-  return [...byAttr.values()]
+  return [...byAssignment.values()]
 }
 
 // Current per-variant value for each of the product's use-for-variations
-// attributes, keyed by child product id then attribute id. Only variation
-// attributes are returned, so a value ticked on the product for a non-variation
+// helpings, keyed by child product id then assignment id. Only variation
+// helpings are returned, so a value ticked on the product for an ordinary
 // attribute never leaks in here.
+//
+// Matching is on the row's own assignment, which is what keeps two helpings of
+// one attribute apart: "Oak" on the main finish and "Oak" on the edge are two
+// rows differing in nothing else.
 export async function getVariantAttributeValues(
   productId: string,
   childProductIds: string[],
 ): Promise<Record<string, Record<string, { valueId: string; label: string }>>> {
   const result: Record<string, Record<string, { valueId: string; label: string }>> = {}
   if (childProductIds.length === 0) return result
-  const rows = await prisma.$queryRaw<{ child_id: string; attribute_id: string; value_id: string; label: string }[]>`
-    SELECT pv."product_id" AS "child_id", av."attribute_id", av."id" AS "value_id", av."label"
+  const rows = await prisma.$queryRaw<{ child_id: string; assignment_id: string; value_id: string; label: string }[]>`
+    SELECT pv."product_id" AS "child_id", ppa."id" AS "assignment_id", av."id" AS "value_id", av."label"
     FROM "pat_product_values" pv
     JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
     JOIN "pat_product_attributes" ppa
-      ON ppa."attribute_id" = av."attribute_id" AND ppa."product_id" = ${productId} AND ppa."use_for_variations" = true
+      ON ppa."id" = pv."assignment_id" AND ppa."product_id" = ${productId} AND ppa."use_for_variations" = true
     WHERE pv."product_id" IN (${Prisma.join(childProductIds)})
   `
   for (const r of rows) {
-    ;(result[r.child_id] ??= {})[r.attribute_id] = { valueId: r.value_id, label: r.label }
+    ;(result[r.child_id] ??= {})[r.assignment_id] = { valueId: r.value_id, label: r.label }
   }
   return result
 }
 
-// Sets (or clears, with valueId null) one variant child's value for one
-// attribute. A variation attribute is single-select per variant, so every other
-// value of the same attribute is removed first.
+// Sets (or clears, with valueId null) one variant child's value for one helping.
+// A variation column is single-select per variant, so whatever that helping held
+// before is removed first.
+//
+// The clear-out is scoped to the assignment rather than the attribute, which is
+// the whole difference: scoped to the attribute, setting the edge finish would
+// take the main finish with it.
 export async function setVariantAttributeValue(
   childProductId: string,
-  attributeId: string,
+  assignmentId: string,
   valueId: string | null,
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`
       DELETE FROM "pat_product_values"
-      WHERE "product_id" = ${childProductId}
-        AND "value_id" IN (SELECT "id" FROM "pat_attribute_values" WHERE "attribute_id" = ${attributeId})
+      WHERE "product_id" = ${childProductId} AND "assignment_id" = ${assignmentId}
     `
     if (valueId) {
+      // The join is the guard: a value belonging to some other attribute than the
+      // one this helping names writes no row at all.
       await tx.$executeRaw`
-        INSERT INTO "pat_product_values" ("product_id", "value_id")
-        SELECT ${childProductId}, av."id" FROM "pat_attribute_values" av
-        WHERE av."id" = ${valueId} AND av."attribute_id" = ${attributeId}
+        INSERT INTO "pat_product_values" ("product_id", "value_id", "assignment_id")
+        SELECT ${childProductId}, av."id", ppa."id"
+        FROM "pat_attribute_values" av
+        JOIN "pat_product_attributes" ppa
+          ON ppa."id" = ${assignmentId} AND ppa."attribute_id" = av."attribute_id"
+        WHERE av."id" = ${valueId}
         ON CONFLICT DO NOTHING
       `
     }

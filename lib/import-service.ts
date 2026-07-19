@@ -49,8 +49,11 @@ export async function importVariationOptions(productId: string): Promise<ImportR
   let attributesCreated = 0
   let valuesCreated = 0
 
-  // option value id -> attribute value id, so variants can be linked below.
+  // option value id -> attribute value id, so variants can be linked below, plus
+  // which attribute each of those values belongs to, so the link can be filed
+  // under the right helping.
   const optionValueToAttributeValue = new Map<string, string>()
+  const attributeIdOfValue = new Map<string, string>()
   const touchedAttributeIds: string[] = []
 
   for (const option of options) {
@@ -106,32 +109,42 @@ export async function importVariationOptions(productId: string): Promise<ImportR
         valuesCreated++
       }
       optionValueToAttributeValue.set(value.id, match.id)
+      attributeIdOfValue.set(match.id, attribute.id)
     }
   }
 
   // Bring each imported attribute into the product's set and mark it used for
   // variations, so it shows as a column on the Variations tab where its per-
   // variant values were just linked. Existing rows keep their show_in_filters.
+  //
+  // The id each one lands on is kept: a per-variant value is filed against the
+  // helping that owns its column, not against the attribute, so that a product
+  // using one attribute for two columns can tell its two answers apart.
+  const assignmentByAttribute = new Map<string, string>()
   for (const attributeId of touchedAttributeIds) {
-    await upsertProductAttribute(productId, { attributeId, useForVariations: true, showInFilters: true })
+    const assignmentId = await upsertProductAttribute(productId, { attributeId, useForVariations: true, showInFilters: true })
+    if (assignmentId) assignmentByAttribute.set(attributeId, assignmentId)
   }
 
   // Wipe previous imported assignments for these attributes before re-linking.
   await clearImportedValuesForProduct(productId, touchedAttributeIds)
 
   const variantMap = await getVariantOptionValueMap(productId)
-  const rows: { productId: string; valueId: string }[] = []
+  const rows: { productId: string; valueId: string; assignmentId: string }[] = []
   for (const [childProductId, optionValueIds] of variantMap) {
     for (const optionValueId of optionValueIds) {
       const valueId = optionValueToAttributeValue.get(optionValueId)
-      if (valueId) rows.push({ productId: childProductId, valueId })
+      if (!valueId) continue
+      const assignmentId = assignmentByAttribute.get(attributeIdOfValue.get(valueId) ?? '')
+      if (!assignmentId) continue
+      rows.push({ productId: childProductId, valueId, assignmentId })
     }
   }
 
   if (rows.length > 0) {
     await prisma.$executeRaw`
-      INSERT INTO "pat_product_values" ("product_id", "value_id")
-      VALUES ${Prisma.join(rows.map((r) => Prisma.sql`(${r.productId}, ${r.valueId})`))}
+      INSERT INTO "pat_product_values" ("product_id", "value_id", "assignment_id")
+      VALUES ${Prisma.join(rows.map((r) => Prisma.sql`(${r.productId}, ${r.valueId}, ${r.assignmentId})`))}
       ON CONFLICT DO NOTHING
     `
   }
