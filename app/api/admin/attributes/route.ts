@@ -9,6 +9,7 @@ import {
   ensureUniqueAttributeSlug,
   nextAttributePosition,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
+import { getAttributeGroup } from '@/modules/product-attributes-for-shop/lib/db/groups'
 
 export async function GET() {
   const gate = await requireShopUser('shop.products', { allowAccess: true })
@@ -20,6 +21,7 @@ export async function GET() {
 const PostBody = z.object({
   name: z.string().min(1).max(80),
   controlType: z.enum(['CHECKBOX', 'SWATCH', 'DROPDOWN', 'IMAGE']).default('CHECKBOX'),
+  groupId: z.string().min(1).nullable().optional(),
 })
 
 export async function POST(request: Request) {
@@ -34,12 +36,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: `There is already an attribute called "${name}".` }, { status: 409 })
   }
 
+  const groupId = parsed.data.groupId ?? null
+  if (groupId && !(await getAttributeGroup(groupId))) {
+    return NextResponse.json({ error: 'Group not found' }, { status: 404 })
+  }
+
   const slug = await ensureUniqueAttributeSlug(slugify(name) || 'attribute')
   const created = await createAttribute({
     name,
     slug,
     controlType: parsed.data.controlType,
     position: await nextAttributePosition(),
+    groupId,
   })
   return NextResponse.json({ id: created.id, slug })
 }

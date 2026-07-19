@@ -9,12 +9,16 @@ import {
   attributeNameTaken,
   ensureUniqueAttributeSlug,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
+import { getAttributeGroup } from '@/modules/product-attributes-for-shop/lib/db/groups'
+import { refileAttributeSwatches } from '@/modules/product-attributes-for-shop/lib/media-folder'
 
 const PatchBody = z.object({
   name: z.string().min(1).max(80).optional(),
   controlType: z.enum(['CHECKBOX', 'SWATCH', 'DROPDOWN', 'IMAGE']).optional(),
   position: z.number().int().optional(),
   showInFilters: z.boolean().optional(),
+  // null is the ungrouped pile, not "leave it alone" - `.optional()` covers that.
+  groupId: z.string().min(1).nullable().optional(),
 })
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -39,7 +43,21 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     slug = await ensureUniqueAttributeSlug(slugify(name) || 'attribute', id)
   }
 
+  const groupId = parsed.data.groupId
+  if (groupId) {
+    if (!(await getAttributeGroup(groupId))) {
+      return NextResponse.json({ error: 'Group not found' }, { status: 404 })
+    }
+  }
+
   await updateAttribute(id, { ...parsed.data, ...(name !== undefined ? { name, slug } : {}) })
+
+  // Both the group and the attribute's own name are folder segments for its
+  // picture swatches, so either changing moves the pictures. Runs after the
+  // update so the re-filer reads the destination, and unconditionally on a
+  // rename because that has quietly stranded pictures since day one.
+  if (groupId !== undefined || name !== undefined) await refileAttributeSwatches(id)
+
   return NextResponse.json({ ok: true })
 }
 

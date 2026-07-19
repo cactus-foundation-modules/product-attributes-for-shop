@@ -29,6 +29,16 @@ export function isValidSwatch(value: string): boolean {
   return isHexSwatch(value) || isImageSwatch(value)
 }
 
+// A folder attributes can be sorted into. Admin-side organisation only - the
+// storefront filter never reads a group, which is why there is no
+// `showInFilters` here to go stale against the attribute's own.
+export type PatAttributeGroup = {
+  id: string
+  name: string
+  slug: string
+  position: number
+}
+
 export type PatAttribute = {
   id: string
   name: string
@@ -36,6 +46,9 @@ export type PatAttribute = {
   controlType: PatControlType
   position: number
   showInFilters: boolean
+  // Which folder it sits in, or null for the ungrouped pile. Also decides where
+  // its picture swatches are filed in the media library.
+  groupId: string | null
   // The shop-variations option name this was imported from, if any. A re-import
   // updates the matching attribute rather than making a second one.
   sourceOptionName: string | null

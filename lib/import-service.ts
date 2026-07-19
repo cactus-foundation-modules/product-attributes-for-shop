@@ -80,6 +80,9 @@ export async function importVariationOptions(productId: string): Promise<ImportR
         controlType,
         position,
         showInFilters: true,
+        // Imported attributes land ungrouped: the variation option they came from
+        // says nothing about which folder the owner would want them filed in.
+        groupId: null,
         sourceOptionName: option.name,
         values: [],
       }

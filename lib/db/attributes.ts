@@ -10,6 +10,7 @@ function mapAttribute(r: Record<string, unknown>): PatAttribute {
     controlType: r.control_type as PatControlType,
     position: r.position as number,
     showInFilters: r.show_in_filters as boolean,
+    groupId: (r.group_id as string | null) ?? null,
     sourceOptionName: (r.source_option_name as string | null) ?? null,
   }
 }
@@ -48,11 +49,12 @@ export async function createAttribute(fields: {
   slug: string
   controlType: PatControlType
   position: number
+  groupId?: string | null
   sourceOptionName?: string | null
 }): Promise<{ id: string }> {
   const rows = await prisma.$queryRaw<[{ id: string }]>`
-    INSERT INTO "pat_attributes" ("name", "slug", "control_type", "position", "source_option_name")
-    VALUES (${fields.name}, ${fields.slug}, ${fields.controlType}, ${fields.position}, ${fields.sourceOptionName ?? null})
+    INSERT INTO "pat_attributes" ("name", "slug", "control_type", "position", "group_id", "source_option_name")
+    VALUES (${fields.name}, ${fields.slug}, ${fields.controlType}, ${fields.position}, ${fields.groupId ?? null}, ${fields.sourceOptionName ?? null})
     RETURNING "id"
   `
   return rows[0]
@@ -60,7 +62,7 @@ export async function createAttribute(fields: {
 
 export async function updateAttribute(
   id: string,
-  fields: { name?: string; slug?: string; controlType?: PatControlType; position?: number; showInFilters?: boolean },
+  fields: { name?: string; slug?: string; controlType?: PatControlType; position?: number; showInFilters?: boolean; groupId?: string | null },
 ): Promise<void> {
   const sets: Prisma.Sql[] = []
   if (fields.name !== undefined) sets.push(Prisma.sql`"name" = ${fields.name}`)
@@ -68,8 +70,26 @@ export async function updateAttribute(
   if (fields.controlType !== undefined) sets.push(Prisma.sql`"control_type" = ${fields.controlType}`)
   if (fields.position !== undefined) sets.push(Prisma.sql`"position" = ${fields.position}`)
   if (fields.showInFilters !== undefined) sets.push(Prisma.sql`"show_in_filters" = ${fields.showInFilters}`)
+  // Explicit null is meaningful here - it is how an attribute is taken back out
+  // of a folder - so the guard is `!== undefined`, not a truthiness check.
+  if (fields.groupId !== undefined) sets.push(Prisma.sql`"group_id" = ${fields.groupId}`)
   if (sets.length === 0) return
   await prisma.$executeRaw`UPDATE "pat_attributes" SET ${Prisma.join(sets, ', ')} WHERE "id" = ${id}`
+}
+
+// Rewrite the whole running order in one go: each id takes its index as its
+// position. Whole-list rather than a swap of two rows because `position` starts
+// out unique-ish but nothing enforces it - two attributes on the same number
+// (an import and a hand-add landing together) would make a swap a no-op that
+// looks like a broken button. Restating every row makes the order true again as
+// a side effect. One transaction, so a half-applied order cannot survive.
+export async function setAttributePositions(ids: string[]): Promise<void> {
+  if (ids.length === 0) return
+  await prisma.$transaction(
+    ids.map((id, index) =>
+      prisma.$executeRaw`UPDATE "pat_attributes" SET "position" = ${index} WHERE "id" = ${id}`,
+    ),
+  )
 }
 
 export async function deleteAttribute(id: string): Promise<void> {
@@ -154,6 +174,18 @@ export async function getAttributeValue(id: string): Promise<PatAttributeValue |
     SELECT * FROM "pat_attribute_values" WHERE "id" = ${id} LIMIT 1
   `
   return rows[0] ? mapValue(rows[0]) : null
+}
+
+// Every value of an attribute that carries a swatch of any kind. The re-filer
+// uses this to walk an attribute's pictures when it changes folder; hex colours
+// come back too and are skipped there, because deciding what is a picture is the
+// validator's job (`isImageSwatch`), not a LIKE pattern's.
+export async function listAttributeSwatches(attributeId: string): Promise<{ id: string; swatch: string }[]> {
+  const rows = await prisma.$queryRaw<{ id: string; swatch: string }[]>`
+    SELECT "id", "swatch" FROM "pat_attribute_values"
+    WHERE "attribute_id" = ${attributeId} AND "swatch" IS NOT NULL
+  `
+  return rows
 }
 
 export async function getAttributeValueOwner(id: string): Promise<{ attributeId: string } | null> {
