@@ -22,8 +22,16 @@ export function AttributesScreen() {
   const [error, setError] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
   const [newControl, setNewControl] = useState<PatControlType>('CHECKBOX')
+  // Which folder a new attribute lands in. Names only have to be unique within a
+  // group, so picking the group up front is what makes a second "Size" possible
+  // at all - without it every addition would be judged against the ungrouped pile.
+  const [newGroupId, setNewGroupId] = useState('')
   const [newGroupName, setNewGroupName] = useState('')
   const [busy, setBusy] = useState(false)
+
+  // Falls back to "No group" if the chosen folder has since been deleted, so the
+  // picker never shows one thing while the Add button sends another.
+  const selectedNewGroupId = groups.some((g) => g.id === newGroupId) ? newGroupId : ''
 
   const load = useCallback(async () => {
     try {
@@ -72,7 +80,14 @@ export function AttributesScreen() {
   async function addAttribute() {
     const name = newName.trim()
     if (!name) return
-    const ok = await send('/api/m/product-attributes-for-shop/admin/attributes', 'POST', { name, controlType: newControl })
+    const ok = await send('/api/m/product-attributes-for-shop/admin/attributes', 'POST', {
+      name,
+      controlType: newControl,
+      groupId: selectedNewGroupId || null,
+    })
+    // The group is deliberately left as it was: adding several attributes to the
+    // same folder in a row is the common case, so resetting it every time would
+    // mean re-picking it for each one.
     if (ok) { setNewName(''); setNewControl('CHECKBOX') }
   }
 
@@ -155,6 +170,20 @@ export function AttributesScreen() {
               <option key={k} value={k}>{CONTROL_LABELS[k]}</option>
             ))}
           </select>
+          {groups.length > 0 && (
+            <select
+              className="form-control"
+              style={{ flex: '0 0 12rem' }}
+              value={selectedNewGroupId}
+              onChange={(e) => setNewGroupId(e.target.value)}
+              aria-label="Group"
+            >
+              <option value="">No group</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+          )}
           <button className="btn btn-primary" disabled={busy || !newName.trim()} onClick={() => void addAttribute()}>Add</button>
         </div>
       </section>

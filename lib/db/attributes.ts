@@ -103,12 +103,23 @@ export async function getAttribute(id: string): Promise<PatAttribute | null> {
   return rows[0] ? mapAttribute(rows[0]) : null
 }
 
-// Case-insensitive duplicate guard. Two attributes sharing a name make the
-// storefront filter ambiguous, so the rename is refused rather than allowed.
-export async function attributeNameTaken(name: string, exceptId: string): Promise<boolean> {
+// Case-insensitive duplicate guard, scoped to one group. Two attributes sharing
+// a name inside the same folder are indistinguishable in the admin list, so that
+// is refused - but the same name in two different folders is a legitimate thing
+// to want ("Size" under Chairs and "Size" under Desks), and the ungrouped pile
+// counts as one folder for this purpose. The storefront stays unambiguous
+// because it keys off the slug, which ensureUniqueAttributeSlug keeps globally
+// unique regardless of grouping.
+//
+// IS NOT DISTINCT FROM rather than `=` so the ungrouped pile (group_id NULL)
+// compares as a group like any other; the ::text cast is there because an
+// untyped null parameter leaves Postgres unable to resolve the operator.
+export async function attributeNameTaken(name: string, groupId: string | null, exceptId: string): Promise<boolean> {
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "pat_attributes"
-    WHERE lower("name") = lower(${name}) AND "id" <> ${exceptId}
+    WHERE lower("name") = lower(${name})
+      AND "group_id" IS NOT DISTINCT FROM ${groupId}::text
+      AND "id" <> ${exceptId}
     LIMIT 1
   `
   return rows.length > 0

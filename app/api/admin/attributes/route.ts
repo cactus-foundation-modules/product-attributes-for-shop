@@ -32,13 +32,21 @@ export async function POST(request: Request) {
 
   const name = parsed.data.name.trim()
   if (!name) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
-  if (await attributeNameTaken(name, '')) {
-    return NextResponse.json({ error: `There is already an attribute called "${name}".` }, { status: 409 })
-  }
 
   const groupId = parsed.data.groupId ?? null
   if (groupId && !(await getAttributeGroup(groupId))) {
     return NextResponse.json({ error: 'Group not found' }, { status: 404 })
+  }
+
+  // Names only have to be unique within a group, so the group has to be resolved
+  // before the clash can be judged.
+  if (await attributeNameTaken(name, groupId, '')) {
+    return NextResponse.json(
+      { error: groupId
+        ? `There is already an attribute called "${name}" in this group.`
+        : `There is already an ungrouped attribute called "${name}".` },
+      { status: 409 },
+    )
   }
 
   const slug = await ensureUniqueAttributeSlug(slugify(name) || 'attribute')

@@ -29,25 +29,40 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (!parsed.success) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
 
   const name = parsed.data.name?.trim()
-  let slug: string | undefined
-  if (name !== undefined) {
-    if (!name) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
-    const attribute = await getAttribute(id)
-    if (!attribute) return NextResponse.json({ error: 'Attribute not found' }, { status: 404 })
-    if (await attributeNameTaken(name, id)) {
-      return NextResponse.json({ error: `There is already an attribute called "${name}".` }, { status: 409 })
-    }
-    // The slug is the filter's query key, so a rename re-slugs it. Any shopper's
-    // bookmarked filter URL stops matching - acceptable, and the alternative
-    // (a slug drifting from its label forever) reads worse in the address bar.
-    slug = await ensureUniqueAttributeSlug(slugify(name) || 'attribute', id)
-  }
+  if (name !== undefined && !name) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
 
   const groupId = parsed.data.groupId
   if (groupId) {
     if (!(await getAttributeGroup(groupId))) {
       return NextResponse.json({ error: 'Group not found' }, { status: 404 })
     }
+  }
+
+  let slug: string | undefined
+  // A name clash is now a property of the (name, group) pair, so either half of
+  // it changing has to be checked - moving an attribute into a folder that
+  // already has one of that name is just as much a duplicate as renaming it
+  // into the clash. Both are judged against what the attribute will look like
+  // after the patch, not what it looks like now.
+  if (name !== undefined || groupId !== undefined) {
+    const attribute = await getAttribute(id)
+    if (!attribute) return NextResponse.json({ error: 'Attribute not found' }, { status: 404 })
+    const nextName = name ?? attribute.name
+    const nextGroupId = groupId !== undefined ? groupId : attribute.groupId
+    if (await attributeNameTaken(nextName, nextGroupId, id)) {
+      return NextResponse.json(
+        { error: nextGroupId
+          ? `There is already an attribute called "${nextName}" in this group.`
+          : `There is already an ungrouped attribute called "${nextName}".` },
+        { status: 409 },
+      )
+    }
+  }
+  if (name !== undefined) {
+    // The slug is the filter's query key, so a rename re-slugs it. Any shopper's
+    // bookmarked filter URL stops matching - acceptable, and the alternative
+    // (a slug drifting from its label forever) reads worse in the address bar.
+    slug = await ensureUniqueAttributeSlug(slugify(name) || 'attribute', id)
   }
 
   await updateAttribute(id, { ...parsed.data, ...(name !== undefined ? { name, slug } : {}) })
