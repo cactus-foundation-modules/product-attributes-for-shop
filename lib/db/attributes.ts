@@ -93,6 +93,17 @@ export async function setAttributePositions(ids: string[]): Promise<void> {
   )
 }
 
+// Same whole-list rewrite as setAttributePositions, scoped to one attribute's
+// values instead of the global attribute list.
+export async function setValuePositions(ids: string[]): Promise<void> {
+  if (ids.length === 0) return
+  await prisma.$transaction(
+    ids.map((id, index) =>
+      prisma.$executeRaw`UPDATE "pat_attribute_values" SET "position" = ${index} WHERE "id" = ${id}`,
+    ),
+  )
+}
+
 export async function deleteAttribute(id: string): Promise<void> {
   await prisma.$executeRaw`DELETE FROM "pat_attributes" WHERE "id" = ${id}`
 }
@@ -202,6 +213,13 @@ export async function listAttributeSwatches(attributeId: string): Promise<{ id: 
     WHERE "attribute_id" = ${attributeId} AND "swatch" IS NOT NULL
   `
   return rows
+}
+
+export async function listAttributeValues(attributeId: string): Promise<PatAttributeValue[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "pat_attribute_values" WHERE "attribute_id" = ${attributeId} ORDER BY "position" ASC, "label" ASC
+  `
+  return rows.map(mapValue)
 }
 
 export async function getAttributeValueOwner(id: string): Promise<{ attributeId: string } | null> {

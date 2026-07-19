@@ -381,6 +381,10 @@ function AttributeCard({
   // What a rename did beyond this screen. Cleared on the next one so it never
   // describes a rename other than the last.
   const [renameNote, setRenameNote] = useState<string | null>(null)
+  // Values get a drag handle rather than the attribute/group arrows: a colour
+  // or material list runs much longer than a handful of attributes, and a chip
+  // has no room for two extra buttons anyway.
+  const [draggedValueId, setDraggedValueId] = useState<string | null>(null)
   const base = '/api/m/product-attributes-for-shop/admin'
   const isSwatch = attribute.controlType === 'SWATCH'
   const isImage = attribute.controlType === 'IMAGE'
@@ -416,6 +420,35 @@ function AttributeCard({
       parts.push(`Left alone on ${blocked.join(', ')} - there is already an option called "${name}" there.`)
     }
     setRenameNote(parts.length > 0 ? parts.join(' ') : null)
+  }
+
+  // Whole running order sent back, same as moveAttribute/moveGroup - a bare
+  // swap would leave two values on the same position if they ever drifted
+  // onto one (a race between two admins), and restating every row heals that
+  // as a side effect.
+  async function moveValue(draggedId: string, targetId: string) {
+    if (draggedId === targetId) return
+    const items = [...attribute.values]
+    const fromIndex = items.findIndex((v) => v.id === draggedId)
+    const toIndex = items.findIndex((v) => v.id === targetId)
+    if (fromIndex === -1 || toIndex === -1) return
+    const [moved] = items.splice(fromIndex, 1)
+    if (!moved) return
+    items.splice(toIndex, 0, moved)
+    setRenameNote(null)
+    const result = await send(`${base}/attributes/${attribute.id}/values/reorder`, 'POST', { ids: items.map((v) => v.id) })
+    if (!result) return
+    // A reorder reaches past this screen the way a rename does, so it reports the
+    // same way. Silent when this attribute feeds no variations - most do not, and
+    // "0 variation options" on every drag would be noise.
+    const optionValues = typeof result.optionValuesMoved === 'number' ? result.optionValuesMoved : 0
+    const variants = typeof result.variantsResequenced === 'number' ? result.variantsResequenced : 0
+    if (optionValues > 0) {
+      setRenameNote(
+        `Reordered on ${optionValues} variation option value${optionValues === 1 ? '' : 's'}` +
+          (variants > 0 ? `, and put ${variants} variation${variants === 1 ? '' : 's'} back in order.` : '.'),
+      )
+    }
   }
 
   // Editing a value reaches as far as a rename of the attribute does, and one
@@ -528,6 +561,12 @@ function AttributeCard({
         {attribute.values.map((value) => (
           <span
             key={value.id}
+            onDragOver={(e) => { if (draggedValueId) e.preventDefault() }}
+            onDrop={(e) => {
+              e.preventDefault()
+              if (draggedValueId) void moveValue(draggedValueId, value.id)
+              setDraggedValueId(null)
+            }}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -537,8 +576,22 @@ function AttributeCard({
               borderRadius: 999,
               background: 'var(--color-bg-subtle)',
               border: '1px solid var(--color-border)',
+              opacity: draggedValueId === value.id ? 0.5 : 1,
             }}
           >
+            {/* Drag handle, not the whole chip: the chip is full of its own
+                buttons and inputs (rename, delete, colour picker), and a click
+                on any of those should never risk being read as a drag. */}
+            <span
+              draggable={!busy}
+              onDragStart={(e) => { setDraggedValueId(value.id); e.dataTransfer.effectAllowed = 'move' }}
+              onDragEnd={() => setDraggedValueId(null)}
+              aria-label={`Drag to reorder ${value.label}`}
+              title="Drag to reorder"
+              style={{ cursor: busy ? 'default' : 'grab', color: 'var(--color-text-muted)', lineHeight: 1, userSelect: 'none' }}
+            >
+              ⠿
+            </span>
             {isImage ? (
               <SwatchImagePicker
                 attributeId={attribute.id}

@@ -323,6 +323,137 @@ export async function syncSourcedOptionValues(
   return { updated, blocked: [...blocked], variantsRenamed }
 }
 
+export type SourcedOrderSyncResult = {
+  /** Option value copies moved into this attribute's running order. */
+  valuesMoved: number
+  /** Variants whose position was re-derived from the new value order. */
+  variantsResequenced: number
+}
+
+/**
+ * Push this attribute's running order of values out to every variation option
+ * copied from it, then put the variants already generated from those options
+ * back in the order the new value order implies.
+ *
+ * shop-variations' own "refresh from source" deliberately syncs labels and
+ * swatches but never positions - a copy keeps whatever slot it was created in.
+ * That is why a reorder here has to say so explicitly rather than leaving it to
+ * the next refresh: without this, dragging Oak above Ash on the attributes
+ * screen would reorder the filter and the product editor while every variations
+ * dropdown in the shop stayed in the old order.
+ *
+ * Values typed straight into shop-variations carry no `source_ref` and are not
+ * owned by this attribute, so they keep their relative order and settle after
+ * the sourced block rather than being interleaved by a rule nobody wrote down.
+ */
+export async function syncSourcedValueOrder(
+  orderedValueIds: string[],
+): Promise<SourcedOrderSyncResult> {
+  if (orderedValueIds.length === 0) return { valuesMoved: 0, variantsResequenced: 0 }
+  if (!(await hasVariationsTables())) return { valuesMoved: 0, variantsResequenced: 0 }
+
+  // The products carrying a copy, read before the write so the variant
+  // resequence below judges the same set the renumber touched.
+  const copies = await prisma.$queryRaw<{ product_id: string }[]>`
+    SELECT DISTINCT o."product_id"
+    FROM "svr_option_values" ov
+    JOIN "svr_options" o ON o."id" = ov."option_id"
+    WHERE ov."source_ref" IN (${Prisma.join(orderedValueIds)})
+      AND o."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
+  `
+  if (copies.length === 0) return { valuesMoved: 0, variantsResequenced: 0 }
+  const productIds = copies.map((r) => r.product_id)
+
+  // The order as a rank table. Casts are explicit because an untyped parameter
+  // in a VALUES list comes through as text, which would sort "10" below "9".
+  const ranks = Prisma.join(
+    orderedValueIds.map((id, index) => Prisma.sql`(${id}::text, ${index}::int)`),
+    ', ',
+  )
+
+  // Every value on a touched option is renumbered, not just the sourced ones:
+  // ROW_NUMBER over the whole option is what keeps the result a clean 0..n with
+  // no collisions, and `src."rank" IS NULL` sorting last is what parks the
+  // hand-typed values after the block this attribute owns, in the order they
+  // were already in.
+  const valuesMoved = await prisma.$executeRaw`
+    WITH "src"("ref", "rank") AS (VALUES ${ranks}),
+    "affected" AS (
+      SELECT DISTINCT ov."option_id"
+      FROM "svr_option_values" ov
+      JOIN "svr_options" o ON o."id" = ov."option_id"
+      JOIN "src" ON "src"."ref" = ov."source_ref"
+      WHERE o."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
+    ),
+    "ranked" AS (
+      SELECT
+        ov."id",
+        (ROW_NUMBER() OVER (
+          PARTITION BY ov."option_id"
+          ORDER BY ("src"."rank" IS NULL), "src"."rank", ov."position", ov."id"
+        ) - 1)::int AS "pos"
+      FROM "svr_option_values" ov
+      JOIN "affected" a ON a."option_id" = ov."option_id"
+      LEFT JOIN "src" ON "src"."ref" = ov."source_ref"
+    )
+    UPDATE "svr_option_values" ov
+    SET "position" = "ranked"."pos"
+    FROM "ranked"
+    WHERE ov."id" = "ranked"."id"
+      AND ov."position" IS DISTINCT FROM "ranked"."pos"
+  `
+
+  const variantsResequenced = await resequenceVariants(productIds)
+  return { valuesMoved, variantsResequenced }
+}
+
+/**
+ * Put every already-generated variant of these products back into the order its
+ * option values now imply, without touching a single variant id.
+ *
+ * shop-variations generates the matrix odometer-style - options left to right,
+ * the last option cycling fastest - and stores the result as a plain `position`
+ * per variant. Reordering the values underneath leaves those numbers describing
+ * an order that no longer exists, so the Variations grid shows Ash above Oak
+ * long after the owner moved Oak up.
+ *
+ * The fix is a renumber, never a regenerate: a variant carries its own stock,
+ * price, photographs and any order ever placed against it, so deleting and
+ * recreating the matrix to get the order right would be an act of vandalism
+ * dressed as a sort. Each variant's key is the array of its value positions
+ * taken in option order; Postgres compares arrays element by element, which is
+ * exactly the odometer the generator used, so ROW_NUMBER over that key
+ * reproduces what a fresh generation would have produced.
+ */
+async function resequenceVariants(productIds: string[]): Promise<number> {
+  if (productIds.length === 0) return 0
+  return prisma.$executeRaw`
+    WITH "keyed" AS (
+      SELECT
+        v."id",
+        v."product_id",
+        array_agg(ov."position" ORDER BY o."position" ASC, o."created_at" ASC, o."id" ASC) AS "key"
+      FROM "svr_variants" v
+      JOIN "svr_variant_values" vv ON vv."variant_id" = v."id"
+      JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
+      JOIN "svr_options" o ON o."id" = ov."option_id"
+      WHERE v."product_id" IN (${Prisma.join(productIds)})
+      GROUP BY v."id", v."product_id"
+    ),
+    "ranked" AS (
+      SELECT
+        "id",
+        (ROW_NUMBER() OVER (PARTITION BY "product_id" ORDER BY "key" ASC, "id" ASC) - 1)::int AS "pos"
+      FROM "keyed"
+    )
+    UPDATE "svr_variants" v
+    SET "position" = "ranked"."pos"
+    FROM "ranked"
+    WHERE v."id" = "ranked"."id"
+      AND v."position" IS DISTINCT FROM "ranked"."pos"
+  `
+}
+
 /**
  * Re-compose the name of every variant child product of these parents from the
  * option value labels it is built from.
