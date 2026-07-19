@@ -65,11 +65,16 @@ export type PatAttributeValue = {
 
 export type PatAttributeWithValues = PatAttribute & { values: PatAttributeValue[] }
 
-// One product's assignments, split by where the value is attached. `own` are
-// values on the product itself; `byVariant` maps a variant child product id to
-// the values carried by that variant.
+// One product's assignments, split by where the value is attached. `own` maps an
+// assignment id (a single helping of one attribute on this product) to the value
+// ids ticked under it; `byVariant` maps a variant child product id to the values
+// carried by that variant.
+//
+// `own` is keyed by assignment rather than flat because a product may use the
+// same attribute twice under two names, and the two helpings have to be able to
+// hold different ticks - including the same value ticked under both.
 export type PatProductAssignments = {
-  own: string[]
+  own: Record<string, string[]>
   byVariant: Record<string, string[]>
 }
 
@@ -81,10 +86,19 @@ export type PatVariantRef = {
   enabled: boolean
 }
 
-// One attribute in a product's set: which attribute, whether its value varies per
-// variant, and whether this product's values for it feed the public filters.
+// One helping of an attribute in a product's set: which attribute, whether its
+// value varies per variant, and whether this product's values for it feed the
+// public filters.
+//
+// A product may hold several helpings of the same attribute, each with a
+// `nameOverride` heading it (all but one must have one - two blocks with the same
+// heading tell the owner nothing). `id` identifies the helping; `attributeId`
+// alone no longer does.
 export type PatProductAttribute = {
+  id: string
   attributeId: string
+  nameOverride: string | null
+  position: number
   useForVariations: boolean
   showInFilters: boolean
 }

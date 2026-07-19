@@ -3,12 +3,12 @@ import { z } from 'zod'
 import { requireShopUser } from '@/modules/shop/lib/access'
 import {
   getProductAssignments,
-  setProductValueIds,
+  setProductValueIdsByAssignment,
   clearImportedValuesForProduct,
 } from '@/modules/product-attributes-for-shop/lib/db/assignments'
 import { getProductAttributes, setProductAttributes } from '@/modules/product-attributes-for-shop/lib/db/membership'
 import { listVariantsForProduct } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
-import { listAttributes, getValueAttributeMap } from '@/modules/product-attributes-for-shop/lib/db/attributes'
+import { listAttributes } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 
 // Everything the product editor's attributes panel needs in one round trip: the
 // attribute vocabulary, this product's set (which attributes it uses, with their
@@ -28,16 +28,23 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   return NextResponse.json({ attributes, assignments, membership, variants })
 }
 
+// The set is submitted in display order, each helping carrying the values ticked
+// under it. Existing helpings send the id they already have; a newly added one
+// sends none and gets one back.
 const PutBody = z.object({
-  // Product-level values (for non-variation attributes in the set).
-  own: z.array(z.string()).max(500),
-  // The product's attribute set with its per-attribute flags.
   membership: z
     .array(
       z.object({
+        id: z.string().nullable().optional(),
         attributeId: z.string(),
+        // Null (or blank) means "call this one whatever the attribute is
+        // called", which only one helping of an attribute may do.
+        nameOverride: z.string().max(120).nullable().optional(),
         useForVariations: z.boolean(),
         showInFilters: z.boolean(),
+        // Product-level ticks for this helping. Ignored when it is used for
+        // variations - the value then belongs to each variant, not the product.
+        values: z.array(z.string()).max(500).default([]),
       }),
     )
     .max(200),
@@ -49,26 +56,54 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params
   const parsed = PutBody.safeParse(await request.json())
   if (!parsed.success) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
-  const { own, membership } = parsed.data
+  const { membership } = parsed.data
+
+  // Two helpings of one attribute must go by different names, and only one of
+  // them may go by the attribute's own. Enforced here as well as in the editor
+  // because the database constraint would otherwise fail the save with an error
+  // no shop owner could act on.
+  const seen = new Set<string>()
+  for (const m of membership) {
+    const key = `${m.attributeId}|${(m.nameOverride ?? '').trim().toLowerCase()}`
+    if (seen.has(key)) {
+      return NextResponse.json(
+        { error: 'This product uses the same attribute twice under one name. Give each helping a name of its own.' },
+        { status: 409 },
+      )
+    }
+    seen.add(key)
+  }
+
+  // An attribute used more than once cannot also be a variations column: that
+  // column is per attribute, so two helpings would both claim it and the value
+  // set on one would appear under the other.
+  const helpingCount = new Map<string, number>()
+  for (const m of membership) helpingCount.set(m.attributeId, (helpingCount.get(m.attributeId) ?? 0) + 1)
+  if (membership.some((m) => m.useForVariations && (helpingCount.get(m.attributeId) ?? 0) > 1)) {
+    return NextResponse.json(
+      { error: 'An attribute used more than once on a product cannot also be set per variant. Use one helping of it, or turn that off.' },
+      { status: 409 },
+    )
+  }
 
   // Save the set, then clear assignments for any attribute dropped from it, so a
-  // removed attribute stops dragging the product into its filter.
+  // removed attribute stops dragging the product into its filter. Only genuinely
+  // gone attributes count - one whose second helping was removed is still on the
+  // product and keeps its values.
   const before = await getProductAttributes(id)
-  await setProductAttributes(id, membership)
-  const keptIds = new Set(membership.map((m) => m.attributeId))
-  const removed = before.map((m) => m.attributeId).filter((a) => !keptIds.has(a))
+  const assignmentIds = await setProductAttributes(id, membership)
+  const keptAttributeIds = new Set(membership.map((m) => m.attributeId))
+  const removed = [...new Set(before.map((m) => m.attributeId))].filter((a) => !keptAttributeIds.has(a))
   if (removed.length > 0) await clearImportedValuesForProduct(id, removed)
 
-  // A use-for-variations attribute's value belongs on each variant, not on the
-  // product as a whole - strip any such value from the product-level set so the
-  // parent never carries a variation value.
-  const variationIds = new Set(membership.filter((m) => m.useForVariations).map((m) => m.attributeId))
-  let ownToSave = own
-  if (variationIds.size > 0 && own.length > 0) {
-    const valueAttr = await getValueAttributeMap(own)
-    ownToSave = own.filter((v) => !variationIds.has(valueAttr.get(v) ?? ''))
-  }
-  await setProductValueIds(id, ownToSave)
+  const byAssignment: Record<string, string[]> = {}
+  membership.forEach((m, index) => {
+    const assignmentId = assignmentIds[index]
+    // A helping naming a since-deleted attribute writes no row and gets no id.
+    if (!assignmentId || m.useForVariations) return
+    byAssignment[assignmentId] = m.values
+  })
+  await setProductValueIdsByAssignment(id, byAssignment)
 
   return NextResponse.json({ ok: true })
 }

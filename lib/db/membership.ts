@@ -6,45 +6,108 @@ import type { PatProductAttribute, PatVariationColumn } from '@/modules/product-
 // The attribute "set" for a product: which attributes it uses and the two
 // per-(product, attribute) flags. Everything here reads/writes pat_product_attributes.
 
-// The product's chosen attributes with their flags.
+// The product's chosen attributes with their flags, in the order the editor
+// shows them. A product may hold the same attribute more than once, so this is a
+// list of helpings, not a list of attributes.
 export async function getProductAttributes(productId: string): Promise<PatProductAttribute[]> {
-  const rows = await prisma.$queryRaw<{ attribute_id: string; use_for_variations: boolean; show_in_filters: boolean }[]>`
-    SELECT "attribute_id", "use_for_variations", "show_in_filters"
-    FROM "pat_product_attributes" WHERE "product_id" = ${productId}
+  const rows = await prisma.$queryRaw<{
+    id: string; attribute_id: string; name_override: string | null; position: number
+    use_for_variations: boolean; show_in_filters: boolean
+  }[]>`
+    SELECT ppa."id", ppa."attribute_id", ppa."name_override", ppa."position",
+           ppa."use_for_variations", ppa."show_in_filters"
+    FROM "pat_product_attributes" ppa
+    JOIN "pat_attributes" a ON a."id" = ppa."attribute_id"
+    WHERE ppa."product_id" = ${productId}
+    ORDER BY ppa."position" ASC, a."position" ASC, a."created_at" ASC
   `
   return rows.map((r) => ({
+    id: r.id,
     attributeId: r.attribute_id,
+    nameOverride: r.name_override,
+    position: r.position,
     useForVariations: r.use_for_variations,
     showInFilters: r.show_in_filters,
   }))
 }
 
-// Replaces a product's whole set in one go. Rows referencing an attribute that no
-// longer exists are dropped by the WHERE on insert rather than erroring.
-export async function setProductAttributes(productId: string, rows: PatProductAttribute[]): Promise<void> {
-  await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`DELETE FROM "pat_product_attributes" WHERE "product_id" = ${productId}`
-    for (const row of rows) {
+// One helping as the editor submits it: an existing row keeps its id, a
+// newly-added one has none yet.
+export type PatProductAttributeInput = {
+  id?: string | null
+  attributeId: string
+  nameOverride?: string | null
+  useForVariations: boolean
+  showInFilters: boolean
+}
+
+/**
+ * Replaces a product's whole set in one go, returning the assignment id each
+ * submitted helping ended up with (by its index in `rows`), so the caller can
+ * save the ticked values against them.
+ *
+ * Helpings the owner kept are updated in place rather than deleted and re-made:
+ * their id is what the value rows hang off, and recreating it would cascade
+ * every tick away mid-save.
+ */
+export async function setProductAttributes(
+  productId: string,
+  rows: PatProductAttributeInput[],
+): Promise<string[]> {
+  return prisma.$transaction(async (tx) => {
+    const keptIds = rows.map((r) => r.id).filter((id): id is string => !!id)
+    if (keptIds.length > 0) {
       await tx.$executeRaw`
-        INSERT INTO "pat_product_attributes" ("product_id", "attribute_id", "use_for_variations", "show_in_filters")
-        SELECT ${productId}, a."id", ${row.useForVariations}, ${row.showInFilters}
-        FROM "pat_attributes" a WHERE a."id" = ${row.attributeId}
-        ON CONFLICT ("product_id", "attribute_id")
-        DO UPDATE SET "use_for_variations" = EXCLUDED."use_for_variations", "show_in_filters" = EXCLUDED."show_in_filters"
+        DELETE FROM "pat_product_attributes"
+        WHERE "product_id" = ${productId} AND "id" NOT IN (${Prisma.join(keptIds)})
       `
+    } else {
+      await tx.$executeRaw`DELETE FROM "pat_product_attributes" WHERE "product_id" = ${productId}`
     }
+
+    const ids: string[] = []
+    for (const [position, row] of rows.entries()) {
+      const name = row.nameOverride?.trim() || null
+      if (row.id) {
+        await tx.$executeRaw`
+          UPDATE "pat_product_attributes"
+          SET "name_override" = ${name}, "position" = ${position},
+              "use_for_variations" = ${row.useForVariations}, "show_in_filters" = ${row.showInFilters}
+          WHERE "id" = ${row.id} AND "product_id" = ${productId}
+        `
+        ids.push(row.id)
+        continue
+      }
+      // The join to pat_attributes drops a helping naming an attribute that has
+      // since been deleted, rather than erroring the whole save.
+      const created = await tx.$queryRaw<{ id: string }[]>`
+        INSERT INTO "pat_product_attributes"
+          ("product_id", "attribute_id", "name_override", "position", "use_for_variations", "show_in_filters")
+        SELECT ${productId}, a."id", ${name}, ${position}, ${row.useForVariations}, ${row.showInFilters}
+        FROM "pat_attributes" a WHERE a."id" = ${row.attributeId}
+        RETURNING "id"
+      `
+      ids.push(created[0]?.id ?? '')
+    }
+    return ids
   })
 }
 
 // Upserts a single membership row without disturbing the rest of the set. Used by
 // the "Copy from variations" import so it can mark the attributes it touched as
-// used-for-variations without clearing anything the admin set by hand.
-export async function upsertProductAttribute(productId: string, row: PatProductAttribute): Promise<void> {
+// used-for-variations without clearing anything the admin set by hand. Imported
+// helpings never carry a name of their own, so the un-named row for the attribute
+// is the one this matches - a renamed second helping is left alone.
+export async function upsertProductAttribute(
+  productId: string,
+  row: { attributeId: string; useForVariations: boolean; showInFilters: boolean },
+): Promise<void> {
   await prisma.$executeRaw`
-    INSERT INTO "pat_product_attributes" ("product_id", "attribute_id", "use_for_variations", "show_in_filters")
-    SELECT ${productId}, a."id", ${row.useForVariations}, ${row.showInFilters}
+    INSERT INTO "pat_product_attributes"
+      ("product_id", "attribute_id", "name_override", "use_for_variations", "show_in_filters")
+    SELECT ${productId}, a."id", ${null}, ${row.useForVariations}, ${row.showInFilters}
     FROM "pat_attributes" a WHERE a."id" = ${row.attributeId}
-    ON CONFLICT ("product_id", "attribute_id")
+    ON CONFLICT ("product_id", "attribute_id", "name_override")
     DO UPDATE SET "use_for_variations" = EXCLUDED."use_for_variations"
   `
 }

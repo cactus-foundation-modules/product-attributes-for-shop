@@ -19,20 +19,38 @@ type Payload = {
   variants: PatVariantRef[]
 }
 
-type MemberFlags = { useForVariations: boolean; showInFilters: boolean }
+/**
+ * One helping of an attribute on this product, as the editor holds it.
+ *
+ * A product may use the same attribute more than once - "Top material" and
+ * "Frame material" both off Material - so this is keyed by its own identity
+ * rather than by the attribute. `id` is the saved row's id, null until the
+ * helping has been saved for the first time; `key` is a browser-side handle that
+ * exists from the moment it is added, so React and the tick handlers have
+ * something stable to hold on to either way.
+ */
+type Helping = {
+  key: string
+  id: string | null
+  attributeId: string
+  /** The name this helping goes by. Empty means "whatever the attribute is called". */
+  name: string
+  useForVariations: boolean
+  showInFilters: boolean
+  values: Set<string>
+}
 
 const BASE = '/api/m/product-attributes-for-shop/admin'
 
-const sameSet = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((x) => b.has(x))
+let helpingKeySeq = 0
+const nextKey = () => `h${helpingKeySeq++}`
 
-function membershipEqual(a: Map<string, MemberFlags>, b: Map<string, MemberFlags>) {
-  if (a.size !== b.size) return false
-  for (const [k, v] of a) {
-    const w = b.get(k)
-    if (!w || w.useForVariations !== v.useForVariations || w.showInFilters !== v.showInFilters) return false
-  }
-  return true
-}
+// A helping flattened to a string, so a whole set can be compared to its
+// baseline with one equality check rather than a nested walk.
+const fingerprint = (helpings: Helping[]) =>
+  JSON.stringify(
+    helpings.map((h) => [h.id, h.attributeId, h.name.trim(), h.useForVariations, h.showInFilters, [...h.values].sort()]),
+  )
 
 // The Attributes tab on the product editor. A product picks a set of the shop's
 // attributes; each can be marked "use for variations" (its value is then set per
@@ -45,9 +63,8 @@ function membershipEqual(a: Map<string, MemberFlags>, b: Map<string, MemberFlags
 // column and save themselves the moment they change.
 export function ProductAttributesEditor({ productId, variationsInstalled }: { productId: string; variationsInstalled: boolean }) {
   const [data, setData] = useState<Payload | null>(null)
-  const [own, setOwn] = useState<Set<string>>(new Set())
-  const [membership, setMembership] = useState<Map<string, MemberFlags>>(new Map())
-  const [baseline, setBaseline] = useState<{ own: Set<string>; membership: Map<string, MemberFlags> } | null>(null)
+  const [helpings, setHelpings] = useState<Helping[]>([])
+  const [baseline, setBaseline] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -57,14 +74,18 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
     try {
       const res = await fetch(`${BASE}/products/${productId}/assignments`)
       const payload: Payload = await res.json()
-      const nextOwn = new Set(payload.assignments.own)
-      const nextMembership = new Map(
-        payload.membership.map((m) => [m.attributeId, { useForVariations: m.useForVariations, showInFilters: m.showInFilters }] as const),
-      )
+      const next: Helping[] = payload.membership.map((m) => ({
+        key: nextKey(),
+        id: m.id,
+        attributeId: m.attributeId,
+        name: m.nameOverride ?? '',
+        useForVariations: m.useForVariations,
+        showInFilters: m.showInFilters,
+        values: new Set(payload.assignments.own[m.id] ?? []),
+      }))
       setData(payload)
-      setOwn(nextOwn)
-      setMembership(nextMembership)
-      setBaseline({ own: nextOwn, membership: nextMembership })
+      setHelpings(next)
+      setBaseline(fingerprint(next))
     } catch {
       setError('Could not load the attributes.')
     }
@@ -73,101 +94,129 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
   // eslint-disable-next-line react-hooks/set-state-in-effect -- delegating to an async helper; every setState runs after an await, never synchronously in the effect body
   useEffect(() => { void load() }, [load])
 
-  const valuesOfAttribute = useCallback(
-    (attributeId: string) => (data?.attributes.find((a) => a.id === attributeId)?.values ?? []).map((v) => v.id),
-    [data],
-  )
-
-  // value id -> attribute id, for stripping a variation attribute's product-level values.
-  const attrOfValue = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const a of data?.attributes ?? []) for (const v of a.values) map.set(v.id, a.id)
+  const attributeById = useMemo(() => {
+    const map = new Map<string, PatAttributeWithValues>()
+    for (const a of data?.attributes ?? []) map.set(a.id, a)
     return map
   }, [data])
 
-  const dirty = useMemo(() => {
-    if (!baseline) return false
-    return !sameSet(own, baseline.own) || !membershipEqual(membership, baseline.membership)
-  }, [own, membership, baseline])
+  /** The name a helping goes by: its own if it has one, else the attribute's. */
+  const displayName = useCallback(
+    (h: Helping) => h.name.trim() || attributeById.get(h.attributeId)?.name || 'Attribute',
+    [attributeById],
+  )
+
+  // How many helpings each attribute has. A repeat is what makes a name of its
+  // own compulsory, and what rules the helping out of being a variations column.
+  const helpingCount = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const h of helpings) counts.set(h.attributeId, (counts.get(h.attributeId) ?? 0) + 1)
+    return counts
+  }, [helpings])
+
+  const isRepeat = useCallback((h: Helping) => (helpingCount.get(h.attributeId) ?? 0) > 1, [helpingCount])
+
+  /**
+   * The helpings that cannot be saved as they stand, with what is wrong.
+   *
+   * Two helpings of one attribute have to be told apart by name, which means all
+   * but one of them needs a name of its own. Which one goes without is the
+   * owner's business, so this only complains about the ones that actually clash
+   * rather than insisting the second one added is the one to rename.
+   */
+  const nameProblems = useMemo(() => {
+    const problems = new Map<string, string>()
+    const seen = new Map<string, string>()
+    for (const h of helpings) {
+      const key = `${h.attributeId}|${h.name.trim().toLowerCase()}`
+      const first = seen.get(key)
+      if (first) {
+        const name = displayName(h)
+        problems.set(h.key, `This product already has an attribute called “${name}”. Give this one a name of its own - “Frame material”, say.`)
+        problems.set(first, `This product already has an attribute called “${name}”. Give this one a name of its own - “Frame material”, say.`)
+      } else {
+        seen.set(key, h.key)
+      }
+    }
+    return problems
+  }, [helpings, displayName])
+
+  const dirty = useMemo(() => baseline != null && fingerprint(helpings) !== baseline, [helpings, baseline])
 
   const save = useCallback(async () => {
-    const membershipArr = [...membership.entries()].map(([attributeId, f]) => ({
-      attributeId,
-      useForVariations: f.useForVariations,
-      showInFilters: f.showInFilters,
-    }))
-    const variationAttrs = new Set(membershipArr.filter((m) => m.useForVariations).map((m) => m.attributeId))
-    const ownArr = [...own].filter((v) => !variationAttrs.has(attrOfValue.get(v) ?? ''))
+    if (nameProblems.size > 0) {
+      throw new Error('Two attributes on this product go by the same name. Give each one a name of its own.')
+    }
+    const body = {
+      membership: helpings.map((h) => ({
+        id: h.id,
+        attributeId: h.attributeId,
+        nameOverride: h.name.trim() || null,
+        useForVariations: h.useForVariations,
+        showInFilters: h.showInFilters,
+        // A per-variant attribute's values live on each variant, so nothing goes
+        // up from here for one.
+        values: h.useForVariations ? [] : [...h.values],
+      })),
+    }
     const res = await fetch(`${BASE}/products/${productId}/assignments`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ own: ownArr, membership: membershipArr }),
+      body: JSON.stringify(body),
     })
     if (!res.ok) {
       const payload = await res.json().catch(() => ({}))
       throw new Error(payload.error ?? 'The attributes would not save.')
     }
-    setBaseline({ own: new Set(ownArr), membership: new Map(membership) })
-    setOwn(new Set(ownArr))
-  }, [productId, own, membership, attrOfValue])
+    // Reload rather than trust the local copy: a newly added helping has no id
+    // until the server gives it one, and without it the next save would add a
+    // second copy of the same block instead of updating this one.
+    await load()
+  }, [productId, helpings, nameProblems, load])
 
   useProductEditorSave({ dirty, save })
-  useProductEditorTabBadge(membership.size > 0 ? String(membership.size) : null)
+  useProductEditorTabBadge(helpings.length > 0 ? String(helpings.length) : null)
+
+  const updateHelping = useCallback((key: string, patch: (h: Helping) => Helping) => {
+    setHelpings((prev) => prev.map((h) => (h.key === key ? patch(h) : h)))
+    setStatus(null)
+  }, [])
 
   function addAttribute() {
     if (!addId) return
-    setMembership((prev) => {
-      if (prev.has(addId)) return prev
-      const next = new Map(prev)
-      next.set(addId, { useForVariations: false, showInFilters: true })
-      return next
-    })
+    const attribute = attributeById.get(addId)
+    setHelpings((prev) => [
+      ...prev,
+      {
+        key: nextKey(),
+        id: null,
+        attributeId: addId,
+        // Empty means "go by whatever the attribute is called", which is right
+        // for the first helping and is the prompt to rename for a second one.
+        name: '',
+        useForVariations: false,
+        showInFilters: true,
+        values: new Set<string>(),
+      },
+    ])
     setAddId('')
+    setStatus(attribute && helpings.some((h) => h.attributeId === addId)
+      ? `Added a second helping of ${attribute.name}. Give it a name of its own below.`
+      : null)
+  }
+
+  function removeHelping(key: string) {
+    setHelpings((prev) => prev.filter((h) => h.key !== key))
     setStatus(null)
   }
 
-  function removeAttribute(attributeId: string) {
-    setMembership((prev) => {
-      const next = new Map(prev)
-      next.delete(attributeId)
-      return next
+  function toggleValue(key: string, valueId: string) {
+    updateHelping(key, (h) => {
+      const values = new Set(h.values)
+      if (values.has(valueId)) values.delete(valueId)
+      else values.add(valueId)
+      return { ...h, values }
     })
-    setOwn((prev) => {
-      const next = new Set(prev)
-      for (const v of valuesOfAttribute(attributeId)) next.delete(v)
-      return next
-    })
-    setStatus(null)
-  }
-
-  function updateFlag(attributeId: string, flag: keyof MemberFlags, value: boolean) {
-    setMembership((prev) => {
-      const current = prev.get(attributeId)
-      if (!current) return prev
-      const next = new Map(prev)
-      next.set(attributeId, { ...current, [flag]: value })
-      return next
-    })
-    // Turning an attribute into a variation one moves its value to each variant,
-    // so it no longer sits on the product as a whole.
-    if (flag === 'useForVariations' && value) {
-      setOwn((prev) => {
-        const next = new Set(prev)
-        for (const v of valuesOfAttribute(attributeId)) next.delete(v)
-        return next
-      })
-    }
-    setStatus(null)
-  }
-
-  function toggleOwn(valueId: string) {
-    setOwn((prev) => {
-      const next = new Set(prev)
-      if (next.has(valueId)) next.delete(valueId)
-      else next.add(valueId)
-      return next
-    })
-    setStatus(null)
   }
 
   // Adds a value to an attribute from inside the product editor, so the owner
@@ -176,8 +225,11 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
   // thing rather than a private "Oak" per product) and an existing label of the
   // same name is reused rather than duplicated. Unlike everything else on this
   // tab it saves at once - it is a change to the vocabulary, not to this product.
+  //
+  // The tick it leaves behind, though, belongs to the helping the owner added it
+  // under, not to every helping of that attribute - hence the key.
   const addValue = useCallback(
-    async (attributeId: string, label: string, swatch: string | null): Promise<boolean> => {
+    async (helpingKey: string, attributeId: string, label: string, swatch: string | null): Promise<boolean> => {
       try {
         const res = await fetch(`${BASE}/attributes/${attributeId}/values`, {
           method: 'POST',
@@ -204,9 +256,12 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
         )
         // A per-variant attribute's value belongs to a variant, so a new one is
         // only offered in the Variations column; anything else is ticked here.
-        if (!membership.get(attributeId)?.useForVariations) {
-          setOwn((prev) => new Set(prev).add(value.id))
-        }
+        setHelpings((prev) =>
+          prev.map((h) => {
+            if (h.key !== helpingKey || h.useForVariations) return h
+            return { ...h, values: new Set(h.values).add(value.id) }
+          }),
+        )
         setError(null)
         setStatus(null)
         return true
@@ -215,7 +270,7 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
         return false
       }
     },
-    [membership],
+    [],
   )
 
   async function copyFromVariations() {
@@ -241,8 +296,9 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
 
   if (!data) return null
 
-  const inSet = data.attributes.filter((a) => membership.has(a.id))
-  const available = data.attributes.filter((a) => !membership.has(a.id))
+  // Every attribute stays on offer, repeat or not: adding a second helping of
+  // one is the whole point, it just has to be called something else.
+  const available = data.attributes
   const hasVariants = data.variants.length > 0
 
   return (
@@ -256,7 +312,8 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
             <p className="spe-section-blurb">
               Pick which attributes this product uses. Tick a value for ordinary attributes, or add your own
               underneath; turn on <strong>Use for variations</strong> to set the value per variant on the
-              Variations tab instead.
+              Variations tab instead. Add the same attribute more than once if you need to - a desk can be
+              oak on top and steel underneath - as long as each one gets a name of its own.
             </p>
           </div>
           {variationsInstalled && hasVariants && (
@@ -274,48 +331,93 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
           </p>
         ) : (
           <>
-            {inSet.length === 0 ? (
+            {helpings.length === 0 ? (
               <p className="spe-empty">No attributes on this product yet. Add one below.</p>
             ) : (
               <div style={{ display: 'grid', gap: '0.75rem' }}>
-                {inSet.map((attribute) => {
-                  const flags = membership.get(attribute.id)!
+                {helpings.map((h) => {
+                  const attribute = attributeById.get(h.attributeId)
+                  // A helping whose attribute has since been deleted shop-wide.
+                  // Showing it as a stub with a Remove beats it vanishing with
+                  // its ticks and no word about why.
+                  if (!attribute) {
+                    return (
+                      <div key={h.key} style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+                          <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+                            This attribute has been deleted from the shop.
+                          </span>
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeHelping(h.key)}>Remove</button>
+                        </div>
+                      </div>
+                    )
+                  }
+                  const problem = nameProblems.get(h.key)
+                  const repeat = isRepeat(h)
+                  const name = displayName(h)
                   return (
-                    <div key={attribute.id} style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-                        <span style={{ fontSize: '0.8125rem', fontWeight: 600 }}>{attribute.name}</span>
+                    <div key={h.key} style={{ border: `1px solid ${problem ? 'var(--color-danger)' : 'var(--color-border)'}`, borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                        <div style={{ display: 'grid', gap: '0.25rem', minWidth: 0, flex: '1 1 12rem' }}>
+                          <input
+                            className="form-control"
+                            style={{ fontSize: '0.8125rem', fontWeight: 600, maxWidth: '18rem' }}
+                            value={h.name}
+                            placeholder={attribute.name}
+                            aria-label={`Name for this helping of ${attribute.name}`}
+                            onChange={(e) => updateHelping(h.key, (prev) => ({ ...prev, name: e.target.value }))}
+                          />
+                          <span style={{ fontSize: '0.75rem', color: problem ? 'var(--color-danger)' : 'var(--color-text-muted)' }}>
+                            {problem
+                              ?? (repeat
+                                ? `One of several helpings of ${attribute.name} on this product, so it needs a name of its own.`
+                                : `Leave blank to call it ${attribute.name}, as the shop does.`)}
+                          </span>
+                        </div>
                         <button
                           type="button"
                           className="btn btn-ghost btn-sm"
-                          aria-label={`Remove ${attribute.name} from this product`}
-                          onClick={() => removeAttribute(attribute.id)}
+                          aria-label={`Remove ${name} from this product`}
+                          onClick={() => removeHelping(h.key)}
+                          style={{ flexShrink: 0 }}
                         >
                           Remove
                         </button>
                       </div>
 
-                      <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', marginBottom: flags.useForVariations ? 0 : '0.625rem' }}>
+                      <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', marginBottom: h.useForVariations ? 0 : '0.625rem' }}>
                         {variationsInstalled && (
-                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.8125rem' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.8125rem', opacity: repeat ? 0.55 : 1 }}>
                             <input
                               type="checkbox"
-                              checked={flags.useForVariations}
-                              onChange={(e) => updateFlag(attribute.id, 'useForVariations', e.target.checked)}
+                              checked={h.useForVariations}
+                              // The Variations tab shows one column per attribute,
+                              // so a second helping of the same one has no column
+                              // to call its own.
+                              disabled={repeat}
+                              onChange={(e) => updateHelping(h.key, (prev) => ({
+                                ...prev,
+                                useForVariations: e.target.checked,
+                                // Its values move to the variants, so they stop
+                                // sitting on the product as a whole.
+                                values: e.target.checked ? new Set<string>() : prev.values,
+                              }))}
                             />
                             Use for variations
+                            {repeat && <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>(not while it is used more than once)</span>}
                           </label>
                         )}
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.8125rem' }}>
                           <input
                             type="checkbox"
-                            checked={flags.showInFilters}
-                            onChange={(e) => updateFlag(attribute.id, 'showInFilters', e.target.checked)}
+                            checked={h.showInFilters}
+                            onChange={(e) => updateHelping(h.key, (prev) => ({ ...prev, showInFilters: e.target.checked }))}
                           />
                           Show in shop filters
                         </label>
                       </div>
 
-                      {flags.useForVariations ? (
+                      {h.useForVariations ? (
                         <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
                           {hasVariants
                             ? 'Set each variant’s value in the new column on the Variations tab. Add the choices it offers below.'
@@ -327,7 +429,12 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                           {attribute.values.map((value) => (
                             <label key={value.id} className="spe-check" style={{ border: '1px solid var(--color-border)' }}>
-                              <input type="checkbox" checked={own.has(value.id)} onChange={() => toggleOwn(value.id)} />
+                              <input
+                                type="checkbox"
+                                checked={h.values.has(value.id)}
+                                aria-label={`${value.label} for ${name}`}
+                                onChange={() => toggleValue(h.key, value.id)}
+                              />
                               {value.swatch && isImageSwatch(value.swatch) ? (
                                 // eslint-disable-next-line @next/next/no-img-element -- media library URLs are arbitrary remote hosts, not a configured next/image loader
                                 <img src={value.swatch} alt="" style={{ width: 16, height: 16, objectFit: 'cover', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }} />
@@ -340,7 +447,10 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                         </div>
                       )}
 
-                      <AddValueBox attribute={attribute} onAdd={addValue} />
+                      <AddValueBox
+                        attribute={attribute}
+                        onAdd={(attributeId, label, swatch) => addValue(h.key, attributeId, label, swatch)}
+                      />
                     </div>
                   )
                 })}
@@ -364,7 +474,10 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                 >
                   <option value="">Add an attribute…</option>
                   {available.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                      {(helpingCount.get(a.id) ?? 0) > 0 ? ' (already on this product)' : ''}
+                    </option>
                   ))}
                 </select>
                 <button type="button" className="btn btn-secondary btn-sm" disabled={!addId} onClick={addAttribute}>

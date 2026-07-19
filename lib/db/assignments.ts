@@ -3,19 +3,33 @@ import { Prisma } from '@prisma/client'
 import { hasVariationsTables } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
 import type { PatProductAssignments } from '@/modules/product-attributes-for-shop/lib/types'
 
-// Raw assignments for one product id (no variant rollup).
+// Raw assignments for one product id (no variant rollup), flat.
 export async function getProductValueIds(productId: string): Promise<string[]> {
   const rows = await prisma.$queryRaw<{ value_id: string }[]>`
-    SELECT "value_id" FROM "pat_product_values" WHERE "product_id" = ${productId}
+    SELECT DISTINCT "value_id" FROM "pat_product_values" WHERE "product_id" = ${productId}
   `
   return rows.map((r) => r.value_id)
+}
+
+// The same rows grouped by the helping they were ticked under, which is what the
+// editor renders: one block per helping, each with its own ticks. Rows with no
+// assignment (values on a variant child, or written before helpings existed)
+// are not product-level ticks and never appear here.
+export async function getProductValueIdsByAssignment(productId: string): Promise<Record<string, string[]>> {
+  const rows = await prisma.$queryRaw<{ assignment_id: string; value_id: string }[]>`
+    SELECT "assignment_id", "value_id" FROM "pat_product_values"
+    WHERE "product_id" = ${productId} AND "assignment_id" IS NOT NULL
+  `
+  const byAssignment: Record<string, string[]> = {}
+  for (const row of rows) (byAssignment[row.assignment_id] ??= []).push(row.value_id)
+  return byAssignment
 }
 
 // A product's own values plus, when shop-variations is installed, the values
 // carried by each of its variant child products - keyed by child product id so
 // the editor can show them per variant.
 export async function getProductAssignments(productId: string): Promise<PatProductAssignments> {
-  const own = await getProductValueIds(productId)
+  const own = await getProductValueIdsByAssignment(productId)
   if (!(await hasVariationsTables())) return { own, byVariant: {} }
 
   const rows = await prisma.$queryRaw<{ child_product_id: string; value_id: string }[]>`
@@ -44,6 +58,41 @@ export async function setProductValueIds(productId: string, valueIds: string[]):
       WHERE v."id" IN (${Prisma.join(valueIds)})
       ON CONFLICT DO NOTHING
     `
+  })
+}
+
+/**
+ * Replaces every product-level tick on a product, grouped by the helping each
+ * one was ticked under.
+ *
+ * Only rows carrying an assignment are cleared: the ones without belong to a
+ * variant child product, and those are written on the Variations tab. A value
+ * whose attribute is not the one its helping names is dropped by the join, so a
+ * crafted request cannot file "Oak" under the Colour block.
+ */
+export async function setProductValueIdsByAssignment(
+  productId: string,
+  byAssignment: Record<string, string[]>,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`
+      DELETE FROM "pat_product_values"
+      WHERE "product_id" = ${productId} AND "assignment_id" IS NOT NULL
+    `
+    for (const [assignmentId, valueIds] of Object.entries(byAssignment)) {
+      if (!assignmentId || valueIds.length === 0) continue
+      await tx.$executeRaw`
+        INSERT INTO "pat_product_values" ("product_id", "value_id", "assignment_id")
+        SELECT ${productId}, v."id", ppa."id"
+        FROM "pat_attribute_values" v
+        JOIN "pat_product_attributes" ppa
+          ON ppa."id" = ${assignmentId}
+         AND ppa."product_id" = ${productId}
+         AND ppa."attribute_id" = v."attribute_id"
+        WHERE v."id" IN (${Prisma.join(valueIds)})
+        ON CONFLICT DO NOTHING
+      `
+    }
   })
 }
 
@@ -97,9 +146,15 @@ export async function getEffectiveValueIdsByProduct(
       prisma.$queryRaw<{ id: string; attribute_id: string }[]>`
         SELECT "id", "attribute_id" FROM "pat_attribute_values" WHERE "id" IN (${Prisma.join(allValueIds)})
       `,
+      // Grouped, because a product can hold the same attribute more than once
+      // under different names. One helping being hidden must not drag a value
+      // the other one shows out of the filters, so this only counts an attribute
+      // as hidden when every helping of it on that product is.
       prisma.$queryRaw<{ product_id: string; attribute_id: string }[]>`
         SELECT "product_id", "attribute_id" FROM "pat_product_attributes"
-        WHERE "product_id" IN (${Prisma.join(productIds)}) AND "show_in_filters" = false
+        WHERE "product_id" IN (${Prisma.join(productIds)})
+        GROUP BY "product_id", "attribute_id"
+        HAVING bool_or("show_in_filters") = false
       `,
     ])
     if (hiddenRows.length > 0) {
