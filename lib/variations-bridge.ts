@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { slugify } from '@/modules/shop/lib/slug'
 import type { PatVariantRef } from '@/modules/product-attributes-for-shop/lib/types'
@@ -197,4 +198,162 @@ export async function renameSourcedOptions(attributeId: string, name: string): P
   `
 
   return { renamed, blocked: clashes.map((r) => r.product_name) }
+}
+
+export type SourcedValueSyncResult = {
+  /** Option values brought into line with this attribute value. */
+  updated: number
+  /**
+   * Products where a copy could not follow the new label, because another value
+   * on the same option is already called that.
+   */
+  blocked: string[]
+  /** Variant child products whose names were re-composed off the new label. */
+  variantsRenamed: number
+}
+
+/**
+ * Bring every variation option value copied from this attribute value into line
+ * with it, and re-compose the variant names that were built from it.
+ *
+ * The mirror image of renameSourcedOptions, one level down. Copies are matched
+ * by `source_ref`, which is how the refresh in shop-variations finds them too -
+ * so a rename here lands in exactly the places a manual "Refresh from source"
+ * would have, without the owner having to visit every product to press it.
+ *
+ * Unlike an option name, a value label has no override flag: a copy either came
+ * from this attribute value or it did not. Values typed in by hand carry no
+ * source_ref and are never touched.
+ */
+export async function syncSourcedOptionValues(
+  valueId: string,
+  fields: { label?: string; swatch?: string | null },
+): Promise<SourcedValueSyncResult> {
+  const { label, swatch } = fields
+  if (label === undefined && swatch === undefined) return { updated: 0, blocked: [], variantsRenamed: 0 }
+  if (!(await hasVariationsTables())) return { updated: 0, blocked: [], variantsRenamed: 0 }
+
+  // The copies, and the products they sit on. Read up front so the swatch and
+  // label statements below judge the same set, and so a product only counts as
+  // touched once however many of its options carry the value.
+  const copies = await prisma.$queryRaw<{ id: string; option_id: string; product_id: string; product_name: string }[]>`
+    SELECT ov."id", ov."option_id", o."product_id", p."name" AS "product_name"
+    FROM "svr_option_values" ov
+    JOIN "svr_options" o ON o."id" = ov."option_id"
+    JOIN "shp_products" p ON p."id" = o."product_id"
+    WHERE ov."source_ref" = ${valueId}
+      AND o."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
+  `
+  if (copies.length === 0) return { updated: 0, blocked: [], variantsRenamed: 0 }
+
+  const touched = new Set<string>()
+  const blocked = new Set<string>()
+  let updated = 0
+
+  if (swatch !== undefined) {
+    // A swatch carries no uniqueness rule, so every copy takes it. An image
+    // swatch is a url in this attribute's own media folder, which is what a
+    // refresh copies across as well - the picture is shared, not duplicated.
+    const rows = await prisma.$executeRaw`
+      UPDATE "svr_option_values" ov
+      SET "swatch" = ${swatch}
+      WHERE ov."source_ref" = ${valueId}
+        AND ov."option_id" IN (
+          SELECT o."id" FROM "svr_options" o WHERE o."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
+        )
+        AND ov."swatch" IS DISTINCT FROM ${swatch}
+    `
+    updated += rows
+    if (rows > 0) for (const copy of copies) touched.add(copy.product_id)
+  }
+
+  if (label !== undefined) {
+    // Two values on one option sharing a label make the generated variant names
+    // ambiguous ("Chair - Oak / Oak"), which is why shop-variations refuses the
+    // rename at its own end. Same answer here: leave that copy as it was and say
+    // where, rather than fail the attribute edit for every other product.
+    const clashes = await prisma.$queryRaw<{ product_name: string }[]>`
+      SELECT DISTINCT p."name" AS "product_name"
+      FROM "svr_option_values" ov
+      JOIN "svr_options" o ON o."id" = ov."option_id"
+      JOIN "shp_products" p ON p."id" = o."product_id"
+      WHERE ov."source_ref" = ${valueId}
+        AND o."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
+        AND lower(ov."label") <> lower(${label})
+        AND EXISTS (
+          SELECT 1 FROM "svr_option_values" sib
+          WHERE sib."option_id" = ov."option_id"
+            AND sib."id" <> ov."id"
+            AND lower(sib."label") = lower(${label})
+        )
+    `
+    for (const row of clashes) blocked.add(row.product_name)
+
+    // DISTINCT ON for the same reason the option rename has it: nothing at the
+    // database level stops one option holding two copies of the same source
+    // value, and renaming both in one snapshot would create the very duplicate
+    // the clash check exists to prevent.
+    const renamed = await prisma.$executeRaw`
+      UPDATE "svr_option_values" ov
+      SET "label" = ${label}
+      WHERE ov."id" IN (
+        SELECT DISTINCT ON (cand."option_id") cand."id"
+        FROM "svr_option_values" cand
+        JOIN "svr_options" o ON o."id" = cand."option_id"
+        WHERE cand."source_ref" = ${valueId}
+          AND o."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
+          AND cand."label" <> ${label}
+        ORDER BY cand."option_id", cand."position", cand."id"
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM "svr_option_values" sib
+        WHERE sib."option_id" = ov."option_id"
+          AND sib."id" <> ov."id"
+          AND lower(sib."label") = lower(${label})
+      )
+    `
+    updated += renamed
+    if (renamed > 0) for (const copy of copies) touched.add(copy.product_id)
+  }
+
+  const variantsRenamed = label !== undefined && touched.size > 0
+    ? await syncVariantChildNames([...touched])
+    : 0
+
+  return { updated, blocked: [...blocked], variantsRenamed }
+}
+
+/**
+ * Re-compose the name of every variant child product of these parents from the
+ * option value labels it is built from.
+ *
+ * shop-variations snapshots a child's name when the matrix is generated, so a
+ * label rename leaves "Chair - Oak / Small" behind until something re-composes
+ * it. That module does this itself when the rename starts on its own screen;
+ * this is the same job in raw SQL for a rename that starts on ours.
+ *
+ * Slugs are deliberately left alone, matching shop-variations: they are live
+ * urls, and the children are hidden from the catalogue anyway. A placed order
+ * keeps the name it snapshotted, which is rather the point of that snapshot.
+ */
+async function syncVariantChildNames(productIds: string[]): Promise<number> {
+  if (productIds.length === 0) return 0
+  return prisma.$executeRaw`
+    UPDATE "shp_products" child
+    SET "name" = composed."name", "updated_at" = CURRENT_TIMESTAMP
+    FROM (
+      SELECT
+        v."child_product_id" AS "id",
+        parent."name" || ' - ' || string_agg(ov."label", ' / ' ORDER BY o."position" ASC, ov."position" ASC) AS "name"
+      FROM "svr_variants" v
+      JOIN "shp_products" parent ON parent."id" = v."product_id"
+      JOIN "svr_variant_values" vv ON vv."variant_id" = v."id"
+      JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
+      JOIN "svr_options" o ON o."id" = ov."option_id"
+      WHERE v."product_id" IN (${Prisma.join(productIds)})
+      GROUP BY v."child_product_id", parent."name"
+    ) composed
+    WHERE child."id" = composed."id"
+      AND child."name" <> composed."name"
+  `
 }

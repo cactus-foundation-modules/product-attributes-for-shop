@@ -11,6 +11,7 @@ import {
   ensureUniqueValueSlug,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 import { fileSwatchImage } from '@/modules/product-attributes-for-shop/lib/media-folder'
+import { syncSourcedOptionValues } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
 import { isImageSwatch, isValidSwatch, SWATCH_MAX_LENGTH } from '@/modules/product-attributes-for-shop/lib/types'
 
 const PatchBody = z.object({
@@ -44,17 +45,41 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   // File a newly-picked picture in the attribute's folder. Filing can rewrite the
   // url, so the stored value is handed back for the editor to show rather than
-  // the one that was sent in.
-  const swatch = parsed.data.swatch
+  // the one that was sent in - and it is the stored one that gets copied out to
+  // the variation options below, not the one that came in.
+  let swatch = parsed.data.swatch
+  let filed = false
   if (swatch && isImageSwatch(swatch)) {
     const owner = await getAttributeValueOwner(id)
     if (owner) {
       await fileSwatchImage(owner.attributeId, id, swatch)
-      return NextResponse.json({ ok: true, swatch: (await getAttributeValue(id))?.swatch ?? swatch })
+      swatch = (await getAttributeValue(id))?.swatch ?? swatch
+      filed = true
     }
   }
 
-  return NextResponse.json({ ok: true })
+  // Carry the edit through to every variation option value built from this
+  // attribute value, and re-name the variants composed from it, so one edit here
+  // is the whole job rather than the first of however many products use it.
+  //
+  // A no-op when shop-variations is not installed, which is the usual case for a
+  // plain filtered catalogue.
+  const propagated = await syncSourcedOptionValues(id, {
+    ...(label !== undefined ? { label } : {}),
+    ...(parsed.data.swatch !== undefined ? { swatch } : {}),
+  })
+
+  return NextResponse.json({
+    ok: true,
+    ...(filed ? { swatch } : {}),
+    ...(propagated.updated > 0 || propagated.blocked.length > 0
+      ? {
+          optionValuesUpdated: propagated.updated,
+          optionValuesBlocked: propagated.blocked,
+          variantsRenamed: propagated.variantsRenamed,
+        }
+      : {}),
+  })
 }
 
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {

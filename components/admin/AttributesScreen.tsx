@@ -413,6 +413,29 @@ function AttributeCard({
     setRenameNote(parts.length > 0 ? parts.join(' ') : null)
   }
 
+  // Editing a value reaches as far as a rename of the attribute does, and one
+  // step further: the variants built from it are named after their values, so
+  // they get re-named too. Same reporting, for the same reason.
+  async function onEditValue(valueId: string, label: string, body: Record<string, unknown>) {
+    setRenameNote(null)
+    const result = await send(`${base}/values/${valueId}`, 'PATCH', body)
+    if (!result) return
+    const updated = typeof result.optionValuesUpdated === 'number' ? result.optionValuesUpdated : 0
+    const blocked = Array.isArray(result.optionValuesBlocked) ? (result.optionValuesBlocked as string[]) : []
+    const variants = typeof result.variantsRenamed === 'number' ? result.variantsRenamed : 0
+    const parts: string[] = []
+    if (updated > 0) {
+      parts.push(
+        `Updated on ${updated} variation value${updated === 1 ? '' : 's'}` +
+          (variants > 0 ? `, and renamed ${variants} variation${variants === 1 ? '' : 's'}.` : '.'),
+      )
+    }
+    if (blocked.length > 0) {
+      parts.push(`Left alone on ${blocked.join(', ')} - there is already a value called "${label}" there.`)
+    }
+    setRenameNote(parts.length > 0 ? parts.join(' ') : null)
+  }
+
   return (
     <section style={{ border: '1px solid var(--color-border)', borderRadius: 12, padding: '1rem 1.25rem', background: 'var(--color-surface)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
@@ -518,12 +541,54 @@ function AttributeCard({
                 label={value.label}
                 disabled={busy}
                 size={18}
-                onPick={(url) => send(`${base}/values/${value.id}`, 'PATCH', { swatch: url }).then(() => undefined)}
+                onPick={(url) => onEditValue(value.id, value.label, { swatch: url })}
+              />
+            ) : isSwatch ? (
+              // The colour is editable in place rather than set-once-on-add: a
+              // shop that has settled on a slightly different oak should not have
+              // to delete the value and lose every product ticked against it.
+              // Uncontrolled, and committed on blur rather than on change: a
+              // native colour picker fires change on every drag of the cursor,
+              // which as a controlled field would be a request per shade.
+              <input
+                type="color"
+                key={value.swatch ?? 'none'}
+                defaultValue={value.swatch && !isImageSwatch(value.swatch) ? value.swatch : '#888888'}
+                disabled={busy}
+                aria-label={`Colour for ${value.label}`}
+                onBlur={(e) => {
+                  if (e.target.value !== value.swatch) void onEditValue(value.id, value.label, { swatch: e.target.value })
+                }}
+                style={{ width: 16, height: 16, padding: 0, border: '1px solid var(--color-border)', borderRadius: 999, background: 'none', cursor: busy ? 'default' : 'pointer' }}
               />
             ) : value.swatch ? (
               <span aria-hidden style={{ width: 10, height: 10, borderRadius: 999, background: value.swatch, border: '1px solid var(--color-border)' }} />
             ) : null}
-            {value.label}
+            {/* The label itself is the rename control - a chip has no room for a
+                separate button beside the delete one, and clicking the word you
+                want to change is where anybody would try first. */}
+            <button
+              type="button"
+              aria-label={`Rename ${value.label}`}
+              title="Rename"
+              disabled={busy}
+              onClick={() => {
+                const next = prompt(`Rename "${value.label}" to:`, value.label)?.trim()
+                if (next && next !== value.label) void onEditValue(value.id, next, { label: next })
+              }}
+              style={{
+                border: 0,
+                background: 'none',
+                padding: 0,
+                font: 'inherit',
+                color: 'inherit',
+                cursor: busy ? 'default' : 'pointer',
+                textDecoration: 'underline dotted',
+                textUnderlineOffset: '0.2em',
+              }}
+            >
+              {value.label}
+            </button>
             <button
               type="button"
               aria-label={`Delete ${value.label}`}
