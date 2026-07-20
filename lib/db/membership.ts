@@ -223,6 +223,19 @@ export async function setVariantAttributeValue(
 // The id of an attribute's value matching a label (case-insensitive), creating it
 // if absent. Lets a sheet edit that names a not-yet-existing value round-trip,
 // the same way importing options auto-creates values.
+// Read-only lookup: the id of an existing value with this label, or null when
+// the vocabulary has no such value yet. Unlike ensureAttributeValueByLabel it
+// never creates one, so a preview can resolve a known label without mutating.
+export async function findAttributeValueByLabel(attributeId: string, label: string): Promise<string | null> {
+  const trimmed = label.trim()
+  if (!trimmed) return null
+  const existing = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "pat_attribute_values"
+    WHERE "attribute_id" = ${attributeId} AND lower("label") = lower(${trimmed}) LIMIT 1
+  `
+  return existing[0]?.id ?? null
+}
+
 export async function ensureAttributeValueByLabel(attributeId: string, label: string): Promise<string | null> {
   const trimmed = label.trim()
   if (!trimmed) return null

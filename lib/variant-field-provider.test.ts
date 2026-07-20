@@ -18,12 +18,19 @@ const getVariantAttributeValues = vi.fn(
 )
 const setVariantAttributeValue = vi.fn(async (_c: string, _assignmentId: string, _v: string | null) => {})
 const ensureAttributeValueByLabel = vi.fn(async (_a: string, label: string): Promise<string | null> => `v-${label.toLowerCase()}`)
+// Read-only lookup. A label starting "new" stands for one the vocabulary has not
+// seen yet: no id. Everything else resolves the same way ensure would, minus the
+// create - so the preview sees a known label as its id and an unknown one as null.
+const findAttributeValueByLabel = vi.fn(async (_a: string, label: string): Promise<string | null> =>
+  label.toLowerCase().startsWith('new') ? null : `v-${label.toLowerCase()}`,
+)
 
 vi.mock('@/modules/product-attributes-for-shop/lib/db/membership', () => ({
   listVariationColumns: (...a: unknown[]) => listVariationColumns(...(a as [string])),
   getVariantAttributeValues: (...a: unknown[]) => getVariantAttributeValues(...(a as [string, string[]])),
   setVariantAttributeValue: (...a: unknown[]) => setVariantAttributeValue(...(a as [string, string, string | null])),
   ensureAttributeValueByLabel: (...a: unknown[]) => ensureAttributeValueByLabel(...(a as [string, string])),
+  findAttributeValueByLabel: (...a: unknown[]) => findAttributeValueByLabel(...(a as [string, string])),
 }))
 
 import { productAttributesVariantFieldProvider as provider } from '@/modules/product-attributes-for-shop/lib/variant-field-provider'
@@ -104,6 +111,53 @@ describe('productAttributesVariantFieldProvider import batching', () => {
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, [])
     await provider.applyImportedRow(parent, 'c1', { 'Some Other Column': 'x' }, ctx)
+    expect(setVariantAttributeValue).not.toHaveBeenCalled()
+  })
+})
+
+describe('productAttributesVariantFieldProvider.rowChanged (preview, read-only)', () => {
+  it('is false when the resolved value matches what is stored', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { asg1: { valueId: 'v-red', label: 'Red' } } })
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    expect(await provider.rowChanged!(parent, 'c1', { 'Main finish': 'Red' }, ctx)).toBe(false)
+    expect(ensureAttributeValueByLabel).not.toHaveBeenCalled() // never creates
+  })
+
+  it('is true when the resolved value differs', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { asg1: { valueId: 'v-red', label: 'Red' } } })
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    expect(await provider.rowChanged!(parent, 'c1', { 'Main finish': 'Blue' }, ctx)).toBe(true)
+  })
+
+  it('is true for a label the vocabulary has not seen yet (apply would create it)', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { asg1: { valueId: 'v-red', label: 'Red' } } })
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    expect(await provider.rowChanged!(parent, 'c1', { 'Main finish': 'Newish' }, ctx)).toBe(true)
+    expect(ensureAttributeValueByLabel).not.toHaveBeenCalled() // still creates nothing
+  })
+
+  it('is true when a present cell is emptied over a stored value', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { asg1: { valueId: 'v-red', label: 'Red' } } })
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    expect(await provider.rowChanged!(parent, 'c1', { 'Main finish': '' }, ctx)).toBe(true)
+  })
+
+  it('is false when an empty cell matches an already-empty value', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    expect(await provider.rowChanged!(parent, 'c1', { 'Main finish': '' }, ctx)).toBe(false)
+  })
+
+  it('is false when the sheet lacks the column, and writes nothing', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    expect(await provider.rowChanged!(parent, 'c1', { 'Some Other Column': 'x' }, ctx)).toBe(false)
     expect(setVariantAttributeValue).not.toHaveBeenCalled()
   })
 })

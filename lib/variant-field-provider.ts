@@ -3,6 +3,7 @@ import {
   getVariantAttributeValues,
   setVariantAttributeValue,
   ensureAttributeValueByLabel,
+  findAttributeValueByLabel,
 } from '@/modules/product-attributes-for-shop/lib/db/membership'
 import { ProductAttributesVariantCell } from '@/modules/product-attributes-for-shop/components/admin/ProductAttributesVariantCell'
 import type { PatVariationColumn } from '@/modules/product-attributes-for-shop/lib/types'
@@ -125,6 +126,40 @@ export const productAttributesVariantFieldProvider = {
         importCtx.current.set(childProductId, byAssignment)
       }
     }
+  },
+
+  // Read-only twin of applyImportedRow, for the import preview's change count.
+  // Resolves each cell's wanted value id and compares it to what is stored,
+  // exactly as applyImportedRow does - but writes nothing, and crucially never
+  // creates a value for a new label. A label the vocabulary has not seen yet has
+  // no id, so it cannot equal the stored id, so it counts as a change (applying
+  // the row would create it and assign it). That means the preview may resolve a
+  // known label without materialising an unknown one, which is the point: a
+  // preview must not mutate.
+  async rowChanged(productId: string, childProductId: string, row: Record<string, string>, ctx?: unknown) {
+    const cols = await columnsFor(productId)
+    if (cols.length === 0) return false
+    const importCtx = isAttrImportCtx(ctx) ? ctx : undefined
+    const rowByLower = new Map(Object.entries(row).map(([k, v]) => [k.trim().toLowerCase(), v]))
+    for (const col of cols) {
+      const key = col.name.trim().toLowerCase()
+      if (!rowByLower.has(key)) continue
+      const cellValue = (rowByLower.get(key) ?? '').trim()
+      const stored = currentValueId(importCtx, childProductId, col.assignmentId)
+      if (!cellValue) {
+        // Emptying a cell that currently holds a value is a change (clears it).
+        if (stored !== null) return true
+        continue
+      }
+      // Resolve the wanted id read-only. A label already in the vocabulary maps
+      // to its id; an unknown label maps to null here, but applying the row would
+      // create it - either way, a mismatch with the stored id is a change.
+      const cacheKey = `${col.attributeId}|${cellValue.toLowerCase()}`
+      let valueId: string | null | undefined = importCtx?.labelCache.get(cacheKey)
+      if (valueId === undefined) valueId = await findAttributeValueByLabel(col.attributeId, cellValue)
+      if (valueId !== stored) return true
+    }
+    return false
   },
 
   Cell: ProductAttributesVariantCell,
