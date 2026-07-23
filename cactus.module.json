@@ -1,6 +1,6 @@
 {
   "name": "product-attributes-for-shop",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "tablePrefix": "pat_",
   "description": "Filterable product attributes for the shop: define attributes like Material or Colour, put a set of them on each product, set a value per variant, hide any from the public filters, and let shoppers narrow the catalogue by the rest.",
   "requiresCoreVersion": "0.5.493",

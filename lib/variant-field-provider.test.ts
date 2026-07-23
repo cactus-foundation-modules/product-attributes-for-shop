@@ -140,6 +140,20 @@ describe('productAttributesVariantFieldProvider.rowChanged (preview, read-only)'
     expect(ensureAttributeValueByLabel).not.toHaveBeenCalled() // still creates nothing
   })
 
+  // The regression that lost Google-Sheet Pull edits: a brand-new attribute whose
+  // cells all started empty (nothing stored, so `stored` is null), the owner
+  // typing its first value in the sheet - a label the vocabulary has not seen yet,
+  // so the read-only resolve is also null. null === null read as "no change", the
+  // Pull dropped the row, and the fresh value never imported. applyImportedRow
+  // would create and assign it, so rowChanged must call it a change.
+  it('is true for a new label typed into a previously-empty cell (nothing stored)', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({}) // c1 has no value for this assignment
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    expect(await provider.rowChanged!(parent, 'c1', { 'Main finish': 'Newish' }, ctx)).toBe(true)
+    expect(ensureAttributeValueByLabel).not.toHaveBeenCalled() // preview still creates nothing
+  })
+
   it('is true when a present cell is emptied over a stored value', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { asg1: { valueId: 'v-red', label: 'Red' } } })
     const parent = nextParent()

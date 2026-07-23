@@ -169,7 +169,15 @@ export const productAttributesVariantFieldProvider = {
         valueId = await findAttributeValueByLabel(col.attributeId, cellValue)
         importCtx?.labelCache.set(cacheKey, valueId)
       }
-      if (valueId !== stored) return true
+      // A non-empty label the vocabulary has not seen yet resolves to null here,
+      // but applyImportedRow WILL create it and assign it - a brand-new value id
+      // that can equal nothing already stored, so it is always a change. Reducing
+      // it to `valueId !== stored` missed the one case where both are null: a
+      // fresh attribute whose cells were all empty, the owner typing its first
+      // values in the sheet. null === null read as "nothing to do", so the
+      // Google-Sheet Pull dropped every one of those rows and the new catalogue
+      // names never imported - the very thing a rowChanged twin exists to prevent.
+      if (valueId === null || valueId !== stored) return true
     }
     return false
   },
