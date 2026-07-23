@@ -96,6 +96,83 @@ export async function setProductValueIdsByAssignment(
   })
 }
 
+// Each product's product-level ticks resolved to labels, keyed product id ->
+// assignment id -> the labels ticked under it. Only NON use-for-variations
+// helpings are read (those are the Products-tab columns); a variation helping's
+// values live on the variant children and belong to the Variations tab. Powers
+// the Google-Sheet Products tab's attribute columns on Push.
+export async function getProductOwnValuesByAssignment(
+  productIds: string[],
+): Promise<Record<string, Record<string, string[]>>> {
+  const result: Record<string, Record<string, string[]>> = {}
+  if (productIds.length === 0) return result
+  const rows = await prisma.$queryRaw<{ product_id: string; assignment_id: string; label: string }[]>`
+    SELECT pv."product_id", pv."assignment_id", av."label"
+    FROM "pat_product_values" pv
+    JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
+    JOIN "pat_product_attributes" ppa
+      ON ppa."id" = pv."assignment_id" AND ppa."use_for_variations" = false
+    WHERE pv."product_id" IN (${Prisma.join(productIds)})
+    ORDER BY av."position" ASC, av."label" ASC
+  `
+  for (const r of rows) {
+    ;((result[r.product_id] ??= {})[r.assignment_id] ??= []).push(r.label)
+  }
+  return result
+}
+
+// The same product-level ticks as value IDS rather than labels, for the import to
+// diff a sheet cell against what is stored without re-resolving each label. Keyed
+// product id -> assignment id -> the value ids ticked.
+export async function getProductOwnValueIdsByAssignment(
+  productIds: string[],
+): Promise<Record<string, Record<string, string[]>>> {
+  const result: Record<string, Record<string, string[]>> = {}
+  if (productIds.length === 0) return result
+  const rows = await prisma.$queryRaw<{ product_id: string; assignment_id: string; value_id: string }[]>`
+    SELECT pv."product_id", pv."assignment_id", pv."value_id"
+    FROM "pat_product_values" pv
+    JOIN "pat_product_attributes" ppa
+      ON ppa."id" = pv."assignment_id" AND ppa."use_for_variations" = false
+    WHERE pv."product_id" IN (${Prisma.join(productIds)})
+  `
+  for (const r of rows) {
+    ;((result[r.product_id] ??= {})[r.assignment_id] ??= []).push(r.value_id)
+  }
+  return result
+}
+
+// Replaces one product-level helping's ticks in place, leaving every other helping
+// on the product untouched - unlike setProductValueIdsByAssignment, which rewrites
+// the product's whole product-level set. A Pull edits one attribute column at a
+// time and a partial sheet must not clear the columns it does not carry, so the
+// write has to be scoped to the single assignment. The attribute join is the
+// guard: a value belonging to another attribute writes no row.
+export async function setProductAssignmentValues(
+  productId: string,
+  assignmentId: string,
+  valueIds: string[],
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`
+      DELETE FROM "pat_product_values"
+      WHERE "product_id" = ${productId} AND "assignment_id" = ${assignmentId}
+    `
+    if (valueIds.length === 0) return
+    await tx.$executeRaw`
+      INSERT INTO "pat_product_values" ("product_id", "value_id", "assignment_id")
+      SELECT ${productId}, v."id", ppa."id"
+      FROM "pat_attribute_values" v
+      JOIN "pat_product_attributes" ppa
+        ON ppa."id" = ${assignmentId}
+       AND ppa."product_id" = ${productId}
+       AND ppa."attribute_id" = v."attribute_id"
+      WHERE v."id" IN (${Prisma.join(valueIds)})
+      ON CONFLICT DO NOTHING
+    `
+  })
+}
+
 // The effective value ids for each of the given parent products: the product's
 // own values unioned with those of its enabled variant children. This is what
 // the storefront filter matches against, so a parent with a red variant is

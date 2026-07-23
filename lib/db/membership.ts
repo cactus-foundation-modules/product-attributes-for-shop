@@ -115,6 +115,39 @@ export async function upsertProductAttribute(
   return rows[0]?.id ?? null
 }
 
+// Every attribute's id and name, for matching a sheet column heading back to the
+// attribute it names. Used by the Variations import to let a value typed into a
+// column for an attribute a product does not yet use auto-attach that attribute
+// to the product (see the variant field provider). Names only, no values - the
+// caller resolves those against the attribute it matches.
+export async function listAllAttributes(): Promise<{ id: string; name: string }[]> {
+  return prisma.$queryRaw<{ id: string; name: string }[]>`
+    SELECT "id", "name" FROM "pat_attributes" ORDER BY "position" ASC
+  `
+}
+
+// The product's product-level (NOT use-for-variations) helpings, in display order
+// - the columns the Products tab of the Google Sheet shows and carries. The twin
+// of listVariationColumns for the parent product's own ticks rather than a
+// variant's. No value vocabulary is gathered: the sheet carries whatever labels
+// are ticked, and an import resolves each against the attribute it names.
+export async function listProductLevelColumns(
+  productId: string,
+): Promise<{ assignmentId: string; attributeId: string; name: string; position: number }[]> {
+  const rows = await prisma.$queryRaw<
+    { assignment_id: string; attribute_id: string; name: string; position: number }[]
+  >`
+    SELECT ppa."id" AS "assignment_id", a."id" AS "attribute_id",
+           COALESCE(NULLIF(TRIM(ppa."name_override"), ''), a."name") AS "name",
+           ppa."position"
+    FROM "pat_product_attributes" ppa
+    JOIN "pat_attributes" a ON a."id" = ppa."attribute_id"
+    WHERE ppa."product_id" = ${productId} AND ppa."use_for_variations" = false
+    ORDER BY ppa."position" ASC, a."position" ASC, a."created_at" ASC
+  `
+  return rows.map((r) => ({ assignmentId: r.assignment_id, attributeId: r.attribute_id, name: r.name, position: r.position }))
+}
+
 // The product's use-for-variations helpings with their selectable values, in
 // display order - the columns the Variations tab shows and the CSV carries.
 //

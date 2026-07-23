@@ -24,6 +24,17 @@ const ensureAttributeValueByLabel = vi.fn(async (_a: string, label: string): Pro
 const findAttributeValueByLabel = vi.fn(async (_a: string, label: string): Promise<string | null> =>
   label.toLowerCase().startsWith('new') ? null : `v-${label.toLowerCase()}`,
 )
+// The whole vocabulary for auto-assign matching. "Supplier" is here on purpose:
+// it collides with a reserved column heading, so it proves the guard refuses it.
+const listAllAttributes = vi.fn(async (): Promise<{ id: string; name: string }[]> => [
+  { id: 'attr1', name: 'Finish' },
+  { id: 'attr-catalog', name: 'Catalog' },
+  { id: 'attr-supplier', name: 'Supplier' },
+])
+// Returns the assignment id an auto-attached attribute lands on.
+const upsertProductAttribute = vi.fn(
+  async (_p: string, row: { attributeId: string; useForVariations: boolean; showInFilters: boolean }): Promise<string | null> => `asg-${row.attributeId}`,
+)
 
 vi.mock('@/modules/product-attributes-for-shop/lib/db/membership', () => ({
   listVariationColumns: (...a: unknown[]) => listVariationColumns(...(a as [string])),
@@ -31,6 +42,8 @@ vi.mock('@/modules/product-attributes-for-shop/lib/db/membership', () => ({
   setVariantAttributeValue: (...a: unknown[]) => setVariantAttributeValue(...(a as [string, string, string | null])),
   ensureAttributeValueByLabel: (...a: unknown[]) => ensureAttributeValueByLabel(...(a as [string, string])),
   findAttributeValueByLabel: (...a: unknown[]) => findAttributeValueByLabel(...(a as [string, string])),
+  listAllAttributes: (...a: unknown[]) => listAllAttributes(...(a as [])),
+  upsertProductAttribute: (...a: unknown[]) => upsertProductAttribute(...(a as [string, { attributeId: string; useForVariations: boolean; showInFilters: boolean }])),
 }))
 
 import { productAttributesVariantFieldProvider as provider } from '@/modules/product-attributes-for-shop/lib/variant-field-provider'
@@ -45,6 +58,8 @@ beforeEach(() => {
   setVariantAttributeValue.mockClear()
   ensureAttributeValueByLabel.mockClear()
   findAttributeValueByLabel.mockClear()
+  listAllAttributes.mockClear()
+  upsertProductAttribute.mockClear()
 })
 
 describe('productAttributesVariantFieldProvider import batching', () => {
@@ -247,5 +262,67 @@ describe('an attribute used for variations more than once', () => {
     await provider.applyImportedRow(parent, 'c1', { 'Main finish': 'Oak', 'Edge finish': 'Walnut' }, ctx)
     expect(setVariantAttributeValue).toHaveBeenCalledTimes(1)
     expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg2', 'v-walnut')
+  })
+})
+
+// Typing a value into a column that names an existing attribute the product does
+// not use for variations yet attaches the attribute to the product and sets the
+// value - so an attribute can be put onto any product straight from the sheet.
+describe('auto-assigning an attribute the product does not use yet', () => {
+  it('attaches the attribute and sets the value on apply', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    await provider.applyImportedRow(parent, 'c1', { 'Catalog': 'Seating' }, ctx)
+    expect(upsertProductAttribute).toHaveBeenCalledWith(parent, { attributeId: 'attr-catalog', useForVariations: true, showInFilters: false })
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg-attr-catalog', 'v-seating')
+  })
+
+  it('rowChanged flags it as a change without creating anything', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    expect(await provider.rowChanged!(parent, 'c1', { 'Catalog': 'Seating' }, ctx)).toBe(true)
+    expect(upsertProductAttribute).not.toHaveBeenCalled()
+    expect(setVariantAttributeValue).not.toHaveBeenCalled()
+  })
+
+  it('attaches the attribute once across many rows', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1', 'c2'])
+    await provider.applyImportedRow(parent, 'c1', { 'Catalog': 'Seating' }, ctx)
+    await provider.applyImportedRow(parent, 'c2', { 'Catalog': 'Seating' }, ctx)
+    expect(upsertProductAttribute).toHaveBeenCalledTimes(1)
+    expect(setVariantAttributeValue).toHaveBeenCalledTimes(2)
+  })
+
+  it('a blank cell in a known-attribute column attaches nothing', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    await provider.applyImportedRow(parent, 'c1', { 'Catalog': '' }, ctx)
+    expect(upsertProductAttribute).not.toHaveBeenCalled()
+    expect(setVariantAttributeValue).not.toHaveBeenCalled()
+  })
+
+  it('a heading that collides with a reserved column is never auto-assigned', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    // "Supplier" is a real attribute in the vocabulary here, but it is also
+    // shop-variations' own column, so it must be left to shop-variations.
+    await provider.applyImportedRow(parent, 'c1', { 'Supplier': 'Acme' }, ctx)
+    expect(upsertProductAttribute).not.toHaveBeenCalled()
+    expect(setVariantAttributeValue).not.toHaveBeenCalled()
+  })
+
+  it('an unknown heading (no matching attribute) attaches nothing', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    await provider.applyImportedRow(parent, 'c1', { 'Made Up Column': 'x' }, ctx)
+    expect(upsertProductAttribute).not.toHaveBeenCalled()
+    expect(setVariantAttributeValue).not.toHaveBeenCalled()
   })
 })
