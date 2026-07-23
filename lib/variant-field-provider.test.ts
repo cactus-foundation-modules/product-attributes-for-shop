@@ -44,6 +44,7 @@ beforeEach(() => {
   getVariantAttributeValues.mockClear()
   setVariantAttributeValue.mockClear()
   ensureAttributeValueByLabel.mockClear()
+  findAttributeValueByLabel.mockClear()
 })
 
 describe('productAttributesVariantFieldProvider import batching', () => {
@@ -159,6 +160,34 @@ describe('productAttributesVariantFieldProvider.rowChanged (preview, read-only)'
     const ctx = await provider.beginImport!(parent, ['c1'])
     expect(await provider.rowChanged!(parent, 'c1', { 'Some Other Column': 'x' }, ctx)).toBe(false)
     expect(setVariantAttributeValue).not.toHaveBeenCalled()
+  })
+
+  // The preview walks every variation row in the sheet in one request. Resolving
+  // the same label from the database once per row put a catalogue of a few hundred
+  // variants over the sixty-second ceiling, and the Pull dialog reported it as a
+  // sheet it could not read. One lookup per distinct label, whatever the row count.
+  it('resolves each label once across rows, not once per row', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1', 'c2', 'c3'])
+    for (const child of ['c1', 'c2', 'c3']) {
+      await provider.rowChanged!(parent, child, { 'Main finish': 'Oak' }, ctx)
+    }
+    expect(findAttributeValueByLabel).toHaveBeenCalledTimes(1)
+  })
+
+  // A label with no id is the expensive case: it can never be "found", so without
+  // caching the miss it was re-queried on every single row.
+  it('caches a label the vocabulary does not have, rather than asking again', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({
+      'c1': { asg1: { valueId: 'v-red', label: 'Red' } },
+      'c2': { asg1: { valueId: 'v-red', label: 'Red' } },
+    })
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1', 'c2'])
+    expect(await provider.rowChanged!(parent, 'c1', { 'Main finish': 'Newish' }, ctx)).toBe(true)
+    expect(await provider.rowChanged!(parent, 'c2', { 'Main finish': 'Newish' }, ctx)).toBe(true)
+    expect(findAttributeValueByLabel).toHaveBeenCalledTimes(1)
   })
 })
 

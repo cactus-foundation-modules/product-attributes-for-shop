@@ -154,9 +154,21 @@ export const productAttributesVariantFieldProvider = {
       // Resolve the wanted id read-only. A label already in the vocabulary maps
       // to its id; an unknown label maps to null here, but applying the row would
       // create it - either way, a mismatch with the stored id is a change.
+      //
+      // The result goes back into the cache, exactly as applyImportedRow does with
+      // its own lookups. Reading the cache without ever filling it meant a catalogue
+      // repeating "Oak" down 577 rows asked the database 577 times, once per row per
+      // column, and a preview of a few hundred variants spent the whole of its
+      // sixty-second budget on round trips it had already made. The two halves never
+      // share a context (a preview and an import each begin their own), so the
+      // find-only ids cached here can never stand in for the ensure that an import
+      // would have done.
       const cacheKey = `${col.attributeId}|${cellValue.toLowerCase()}`
       let valueId: string | null | undefined = importCtx?.labelCache.get(cacheKey)
-      if (valueId === undefined) valueId = await findAttributeValueByLabel(col.attributeId, cellValue)
+      if (valueId === undefined) {
+        valueId = await findAttributeValueByLabel(col.attributeId, cellValue)
+        importCtx?.labelCache.set(cacheKey, valueId)
+      }
       if (valueId !== stored) return true
     }
     return false
