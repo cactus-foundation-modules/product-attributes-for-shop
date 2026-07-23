@@ -170,11 +170,18 @@ export async function getEffectiveValueIdsByProduct(
 }
 
 // How many products carry each value, counted the same way the storefront
-// filters (parent's own values unioned with its enabled variants'). Powers the
-// counts beside each filter option and the hide-empty-values setting.
-export async function countProductsByValue(productIds: string[]): Promise<Map<string, number>> {
+// filters. Powers the counts beside each filter option and the hide-empty-values
+// setting, so it MUST see products exactly as the matrix does: passed the same
+// includeVariantValues the grid builds its matrix with. Left to its own devices
+// it rolled variants up regardless, so with the setting off a variant-only value
+// showed a non-zero count, survived hide-empty-values, and then matched nothing
+// when ticked - a dead-end filter option.
+export async function countProductsByValue(
+  productIds: string[],
+  opts?: { includeVariantValues?: boolean },
+): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
-  const effective = await getEffectiveValueIdsByProduct(productIds)
+  const effective = await getEffectiveValueIdsByProduct(productIds, opts)
   for (const valueIds of effective.values()) {
     for (const valueId of valueIds) counts.set(valueId, (counts.get(valueId) ?? 0) + 1)
   }

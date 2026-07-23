@@ -98,7 +98,7 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
   const productIds = products.map((p) => p.id)
   const [matrix, counts] = await Promise.all([
     getEffectiveValueIdsByProduct(productIds, { includeVariantValues: settings.includeVariantValues }),
-    countProductsByValue(productIds),
+    countProductsByValue(productIds, { includeVariantValues: settings.includeVariantValues }),
   ])
 
   const tagById = new Map(tags.map((t) => [t.id, t.slug]))
