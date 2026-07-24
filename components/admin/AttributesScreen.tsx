@@ -732,38 +732,19 @@ function AttributeCard({
             </button>
           </span>
         ))}
-        {/* Only drawn when there is something left to draw, and it says how much
-            is left: "Load more" on its own gives no idea whether one more press
-            finishes the job or forty do. Show all is there for the shop that
-            genuinely wants all six hundred at once. */}
+        {/* One control, not two. Every value is already in memory - the slice is
+            purely to keep six hundred chips off the screen - so paging through
+            them thirty at a time bought nothing but a second button that looked
+            like the first. It says how many there are, because "Show all" on its
+            own gives no idea whether the press unfolds ten or six hundred. */}
         {hiddenValueCount > 0 && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem' }}>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setVisibleValues((n) => n + VALUE_PAGE_SIZE)}
-            >
-              Load more ({hiddenValueCount} more)
-            </button>
-            {hiddenValueCount > VALUE_PAGE_SIZE && (
-              <button
-                type="button"
-                onClick={() => setVisibleValues(attribute.values.length)}
-                style={{
-                  border: 0,
-                  background: 'none',
-                  padding: 0,
-                  font: 'inherit',
-                  color: 'var(--color-text-muted)',
-                  cursor: 'pointer',
-                  textDecoration: 'underline dotted',
-                  textUnderlineOffset: '0.2em',
-                }}
-              >
-                Show all {attribute.values.length}
-              </button>
-            )}
-          </span>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setVisibleValues(attribute.values.length)}
+          >
+            Show all {attribute.values.length}
+          </button>
         )}
       </div>
 
