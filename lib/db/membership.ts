@@ -13,9 +13,11 @@ export async function getProductAttributes(productId: string): Promise<PatProduc
   const rows = await prisma.$queryRaw<{
     id: string; attribute_id: string; name_override: string | null; position: number
     use_for_variations: boolean; show_in_filters: boolean
+    show_in_spec: boolean; spec_section_id: string | null; spec_position: number
   }[]>`
     SELECT ppa."id", ppa."attribute_id", ppa."name_override", ppa."position",
-           ppa."use_for_variations", ppa."show_in_filters"
+           ppa."use_for_variations", ppa."show_in_filters",
+           ppa."show_in_spec", ppa."spec_section_id", ppa."spec_position"
     FROM "pat_product_attributes" ppa
     JOIN "pat_attributes" a ON a."id" = ppa."attribute_id"
     WHERE ppa."product_id" = ${productId}
@@ -28,6 +30,9 @@ export async function getProductAttributes(productId: string): Promise<PatProduc
     position: r.position,
     useForVariations: r.use_for_variations,
     showInFilters: r.show_in_filters,
+    showInSpec: r.show_in_spec,
+    specSectionId: r.spec_section_id,
+    specPosition: r.spec_position,
   }))
 }
 
@@ -39,6 +44,13 @@ export type PatProductAttributeInput = {
   nameOverride?: string | null
   useForVariations: boolean
   showInFilters: boolean
+  // The Specification-tab placement, resolved by the caller: whether the helping
+  // shows on the page, which of the product's sections it sits under (the section
+  // must already exist - the route creates sections first and maps the editor's
+  // key to the saved id), and its order within that section.
+  showInSpec: boolean
+  specSectionId: string | null
+  specPosition: number
 }
 
 /**
@@ -72,7 +84,9 @@ export async function setProductAttributes(
         await tx.$executeRaw`
           UPDATE "pat_product_attributes"
           SET "name_override" = ${name}, "position" = ${position},
-              "use_for_variations" = ${row.useForVariations}, "show_in_filters" = ${row.showInFilters}
+              "use_for_variations" = ${row.useForVariations}, "show_in_filters" = ${row.showInFilters},
+              "show_in_spec" = ${row.showInSpec}, "spec_section_id" = ${row.specSectionId},
+              "spec_position" = ${row.specPosition}
           WHERE "id" = ${row.id} AND "product_id" = ${productId}
         `
         ids.push(row.id)
@@ -82,8 +96,10 @@ export async function setProductAttributes(
       // since been deleted, rather than erroring the whole save.
       const created = await tx.$queryRaw<{ id: string }[]>`
         INSERT INTO "pat_product_attributes"
-          ("product_id", "attribute_id", "name_override", "position", "use_for_variations", "show_in_filters")
-        SELECT ${productId}, a."id", ${name}, ${position}, ${row.useForVariations}, ${row.showInFilters}
+          ("product_id", "attribute_id", "name_override", "position", "use_for_variations", "show_in_filters",
+           "show_in_spec", "spec_section_id", "spec_position")
+        SELECT ${productId}, a."id", ${name}, ${position}, ${row.useForVariations}, ${row.showInFilters},
+               ${row.showInSpec}, ${row.specSectionId}, ${row.specPosition}
         FROM "pat_attributes" a WHERE a."id" = ${row.attributeId}
         RETURNING "id"
       `

@@ -111,6 +111,26 @@ export type PatProductAttribute = {
   position: number
   useForVariations: boolean
   showInFilters: boolean
+  // Whether this helping appears on the public product page's Specification tab.
+  // Off by default: an attribute is added to be filtered by or set per variant,
+  // and only some of them are worth a shopper's eye on the page itself.
+  showInSpec: boolean
+  // Which of this product's own spec sections it sits under, or null for the
+  // unsectioned run shown before the first heading. Per product, not shop-wide -
+  // see pat_product_spec_sections.
+  specSectionId: string | null
+  // Its order within that section (or within the unsectioned run).
+  specPosition: number
+}
+
+// One heading a product sorts its shown attributes under on the Specification
+// tab - "Mechanisms", "Guarantee". Per product and made on the product editor,
+// deliberately unlike the shop-wide PatAttributeGroup, which only organises the
+// vocabulary in admin.
+export type PatProductSpecSection = {
+  id: string
+  name: string
+  position: number
 }
 
 // A "use for variations" helping as the Variations-tab column needs it: the

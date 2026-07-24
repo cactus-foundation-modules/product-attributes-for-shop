@@ -7,6 +7,7 @@ import type {
   PatAttributeWithValues,
   PatProductAssignments,
   PatProductAttribute,
+  PatProductSpecSection,
   PatVariantRef,
 } from '@/modules/product-attributes-for-shop/lib/types'
 import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
@@ -17,6 +18,16 @@ type Payload = {
   assignments: PatProductAssignments
   membership: PatProductAttribute[]
   variants: PatVariantRef[]
+  sections: PatProductSpecSection[]
+}
+
+// One Specification section as the editor holds it. `id` is the saved row's id,
+// null until first save; `key` is a browser-side handle that exists from the
+// moment it is added, so a helping can point at a section before it has an id.
+type Section = {
+  key: string
+  id: string | null
+  name: string
 }
 
 /**
@@ -37,6 +48,12 @@ type Helping = {
   name: string
   useForVariations: boolean
   showInFilters: boolean
+  // Whether the helping shows on the public product page's Specification tab, and
+  // where: which section (by the section's browser `key`, null for the
+  // unsectioned run before the first heading) and in what order within it.
+  showInSpec: boolean
+  specSectionKey: string | null
+  specPosition: number
   values: Set<string>
 }
 
@@ -45,12 +62,21 @@ const BASE = '/api/m/product-attributes-for-shop/admin'
 let helpingKeySeq = 0
 const nextKey = () => `h${helpingKeySeq++}`
 
+let sectionKeySeq = 0
+const nextSectionKey = () => `s${sectionKeySeq++}`
+
 // A helping flattened to a string, so a whole set can be compared to its
-// baseline with one equality check rather than a nested walk.
-const fingerprint = (helpings: Helping[]) =>
-  JSON.stringify(
-    helpings.map((h) => [h.id, h.attributeId, h.name.trim(), h.useForVariations, h.showInFilters, [...h.values].sort()]),
-  )
+// baseline with one equality check rather than a nested walk. Sections come
+// along so a rename, reorder or an attribute dragged between them counts as a
+// change worth saving.
+const fingerprint = (helpings: Helping[], sections: Section[]) =>
+  JSON.stringify({
+    h: helpings.map((h) => [
+      h.id, h.attributeId, h.name.trim(), h.useForVariations, h.showInFilters,
+      h.showInSpec, h.specSectionKey, h.specPosition, [...h.values].sort(),
+    ]),
+    s: sections.map((s) => [s.id, s.name.trim()]),
+  })
 
 // The Attributes tab on the product editor. A product picks a set of the shop's
 // attributes; each can be marked "use for variations" (its value is then set per
@@ -64,16 +90,20 @@ const fingerprint = (helpings: Helping[]) =>
 export function ProductAttributesEditor({ productId, variationsInstalled }: { productId: string; variationsInstalled: boolean }) {
   const [data, setData] = useState<Payload | null>(null)
   const [helpings, setHelpings] = useState<Helping[]>([])
+  const [sections, setSections] = useState<Section[]>([])
   const [baseline, setBaseline] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [addId, setAddId] = useState('')
+  const [draggedKey, setDraggedKey] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
       const res = await fetch(`${BASE}/products/${productId}/assignments`)
       const payload: Payload = await res.json()
+      const nextSections: Section[] = payload.sections.map((s) => ({ key: nextSectionKey(), id: s.id, name: s.name }))
+      const idToKey = new Map(nextSections.map((s) => [s.id, s.key]))
       const next: Helping[] = payload.membership.map((m) => ({
         key: nextKey(),
         id: m.id,
@@ -81,11 +111,15 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
         name: m.nameOverride ?? '',
         useForVariations: m.useForVariations,
         showInFilters: m.showInFilters,
+        showInSpec: m.showInSpec,
+        specSectionKey: m.specSectionId ? idToKey.get(m.specSectionId) ?? null : null,
+        specPosition: m.specPosition,
         values: new Set(payload.assignments.own[m.id] ?? []),
       }))
       setData(payload)
       setHelpings(next)
-      setBaseline(fingerprint(next))
+      setSections(nextSections)
+      setBaseline(fingerprint(next, nextSections))
     } catch {
       setError('Could not load the attributes.')
     }
@@ -141,19 +175,32 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
     return problems
   }, [helpings, displayName])
 
-  const dirty = useMemo(() => baseline != null && fingerprint(helpings) !== baseline, [helpings, baseline])
+  const dirty = useMemo(
+    () => baseline != null && fingerprint(helpings, sections) !== baseline,
+    [helpings, sections, baseline],
+  )
 
   const save = useCallback(async () => {
     if (nameProblems.size > 0) {
       throw new Error('Two attributes on this product go by the same name. Give each one a name of its own.')
     }
     const body = {
+      // Empty-named sections never persist (nothing to head a group with), so
+      // they are dropped here; a helping left in one falls back to unsectioned.
+      sections: sections
+        .filter((s) => s.name.trim())
+        .map((s, index) => ({ id: s.id, key: s.key, name: s.name.trim(), position: index })),
       membership: helpings.map((h) => ({
         id: h.id,
         attributeId: h.attributeId,
         nameOverride: h.name.trim() || null,
         useForVariations: h.useForVariations,
         showInFilters: h.showInFilters,
+        showInSpec: h.showInSpec,
+        // Only meaningful when shown; cleared otherwise so a hidden helping keeps
+        // no stale placement.
+        specSectionKey: h.showInSpec ? h.specSectionKey : null,
+        specPosition: h.specPosition,
         // A per-variant attribute's values live on each variant, so nothing goes
         // up from here for one.
         values: h.useForVariations ? [] : [...h.values],
@@ -168,11 +215,11 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
       const payload = await res.json().catch(() => ({}))
       throw new Error(payload.error ?? 'The attributes would not save.')
     }
-    // Reload rather than trust the local copy: a newly added helping has no id
-    // until the server gives it one, and without it the next save would add a
-    // second copy of the same block instead of updating this one.
+    // Reload rather than trust the local copy: a newly added helping (or section)
+    // has no id until the server gives it one, and without it the next save would
+    // add a second copy instead of updating this one.
     await load()
-  }, [productId, helpings, nameProblems, load])
+  }, [productId, helpings, sections, nameProblems, load])
 
   useProductEditorSave({ dirty, save })
   useProductEditorTabBadge(helpings.length > 0 ? String(helpings.length) : null)
@@ -196,6 +243,9 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
         name: '',
         useForVariations: false,
         showInFilters: true,
+        showInSpec: false,
+        specSectionKey: null,
+        specPosition: 0,
         values: new Set<string>(),
       },
     ])
@@ -217,6 +267,80 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
       else values.add(valueId)
       return { ...h, values }
     })
+  }
+
+  // Turns a helping on or off in the Specification tab. Turning it on drops it at
+  // the end of the unsectioned run; turning it off frees its placement so it does
+  // not reappear where it was if switched back on later.
+  function toggleShowInSpec(key: string) {
+    setHelpings((prev) => {
+      const target = prev.find((h) => h.key === key)
+      if (!target) return prev
+      if (target.showInSpec) {
+        return prev.map((h) => (h.key === key ? { ...h, showInSpec: false, specSectionKey: null } : h))
+      }
+      const nextPos = prev.filter((h) => h.showInSpec && h.specSectionKey == null).length
+      return prev.map((h) => (h.key === key ? { ...h, showInSpec: true, specSectionKey: null, specPosition: nextPos } : h))
+    })
+    setStatus(null)
+  }
+
+  function addSection() {
+    setSections((prev) => [...prev, { key: nextSectionKey(), id: null, name: '' }])
+    setStatus(null)
+  }
+
+  function renameSection(key: string, name: string) {
+    setSections((prev) => prev.map((s) => (s.key === key ? { ...s, name } : s)))
+    setStatus(null)
+  }
+
+  // Removing a section tips its attributes back into the unsectioned run rather
+  // than hiding them - the same courtesy the database FK extends (ON DELETE SET
+  // NULL). They keep showing on the page, just without a heading over them.
+  function removeSection(key: string) {
+    setSections((prev) => prev.filter((s) => s.key !== key))
+    setHelpings((prev) => prev.map((h) => (h.specSectionKey === key ? { ...h, specSectionKey: null } : h)))
+    setStatus(null)
+  }
+
+  function moveSection(key: string, dir: -1 | 1) {
+    setSections((prev) => {
+      const index = prev.findIndex((s) => s.key === key)
+      const swap = index + dir
+      if (index < 0 || swap < 0 || swap >= prev.length) return prev
+      const next = [...prev]
+      const a = next[index]
+      const b = next[swap]
+      if (!a || !b) return prev
+      next[index] = b
+      next[swap] = a
+      return next
+    })
+    setStatus(null)
+  }
+
+  // Drops the dragged helping into a section (null = the unsectioned run) just
+  // before `beforeKey`, or at the end when it is null. Only the target run's
+  // positions are renumbered; the source run keeps its order (gaps are harmless,
+  // everything reads back sorted by position).
+  function placeHelping(draggedKeyArg: string, sectionKey: string | null, beforeKey: string | null) {
+    setHelpings((prev) => {
+      let next = prev.map((h) =>
+        h.key === draggedKeyArg ? { ...h, showInSpec: true, specSectionKey: sectionKey } : h,
+      )
+      const ordered = next
+        .filter((h) => h.showInSpec && (h.specSectionKey ?? null) === sectionKey)
+        .sort((a, b) => a.specPosition - b.specPosition)
+        .map((h) => h.key)
+        .filter((k) => k !== draggedKeyArg)
+      const at = beforeKey ? ordered.indexOf(beforeKey) : -1
+      ordered.splice(at === -1 ? ordered.length : at, 0, draggedKeyArg)
+      const posByKey = new Map(ordered.map((k, i) => [k, i]))
+      next = next.map((h) => (posByKey.has(h.key) ? { ...h, specPosition: posByKey.get(h.key) as number } : h))
+      return next
+    })
+    setStatus(null)
   }
 
   // Adds a value to an attribute from inside the product editor, so the owner
@@ -300,6 +424,15 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
   // one is the whole point, it just has to be called something else.
   const available = data.attributes
   const hasVariants = data.variants.length > 0
+
+  // The helpings that appear on the Specification tab, and how they fall into the
+  // product's sections. A helping whose attribute has since been deleted
+  // shop-wide is left out here (it shows as a stub above with a Remove).
+  const specHelpings = helpings.filter((h) => h.showInSpec && attributeById.has(h.attributeId))
+  const chipsFor = (sectionKey: string | null) =>
+    specHelpings
+      .filter((h) => (h.specSectionKey ?? null) === sectionKey)
+      .sort((a, b) => a.specPosition - b.specPosition)
 
   return (
     <div className="spe-panel">
@@ -400,8 +533,11 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                                 ...prev,
                                 useForVariations: e.target.checked,
                                 // Its values move to the variants, so they stop
-                                // sitting on the product as a whole.
+                                // sitting on the product as a whole - and with no
+                                // single value it has no place in the spec either.
                                 values: e.target.checked ? new Set<string>() : prev.values,
+                                showInSpec: e.target.checked ? false : prev.showInSpec,
+                                specSectionKey: e.target.checked ? null : prev.specSectionKey,
                               }))}
                             />
                             Use for variations
@@ -420,6 +556,16 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                           />
                           Show in shop filters
                         </label>
+                        {!h.useForVariations && (
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.8125rem' }}>
+                            <input
+                              type="checkbox"
+                              checked={h.showInSpec}
+                              onChange={() => toggleShowInSpec(h.key)}
+                            />
+                            Show in specification
+                          </label>
+                        )}
                       </div>
 
                       {h.useForVariations ? (
@@ -493,6 +639,188 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
           </>
         )}
       </section>
+
+      {helpings.some((h) => !h.useForVariations) && (
+        <section className="spe-section" style={{ marginTop: '1.5rem' }}>
+          <h3 className="spe-section-head">Specification layout</h3>
+          <p className="spe-section-blurb">
+            Everything ticked <strong>Show in specification</strong> above appears on the product page&rsquo;s
+            Specification tab. Group related ones under a heading of your own - &ldquo;Mechanisms&rdquo;,
+            &ldquo;Guarantee&rdquo; - by adding a section and dragging attributes into it. Anything left loose sits
+            above the first heading.
+          </p>
+
+          {specHelpings.length === 0 && sections.length === 0 ? (
+            <p className="spe-empty">
+              Nothing shown in the specification yet. Tick &ldquo;Show in specification&rdquo; on an attribute above,
+              then arrange it here.
+            </p>
+          ) : (
+            <div style={{ display: 'grid', gap: '0.75rem' }}>
+              {/* The unsectioned run, shown above the first heading on the page.
+                  Always a drop target so an attribute can be pulled back out of a
+                  section, even when it currently holds nothing. */}
+              <SpecBucket
+                sectionKey={null}
+                chips={chipsFor(null)}
+                displayName={displayName}
+                draggedKey={draggedKey}
+                setDraggedKey={setDraggedKey}
+                onPlace={placeHelping}
+                emptyHint="Drag attributes here to show them above the first heading."
+              />
+
+              {sections.map((section, index) => (
+                <div
+                  key={section.key}
+                  style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}
+                >
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+                    <input
+                      className="form-control"
+                      style={{ fontSize: '0.8125rem', fontWeight: 600, flex: '1 1 12rem', maxWidth: '20rem' }}
+                      value={section.name}
+                      placeholder="Section name, e.g. Mechanisms"
+                      aria-label="Section name"
+                      onChange={(e) => renameSection(section.key, e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      aria-label="Move section up"
+                      disabled={index === 0}
+                      onClick={() => moveSection(section.key, -1)}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      aria-label="Move section down"
+                      disabled={index === sections.length - 1}
+                      onClick={() => moveSection(section.key, 1)}
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      aria-label={`Remove ${section.name.trim() || 'this'} section`}
+                      onClick={() => removeSection(section.key)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <SpecBucket
+                    sectionKey={section.key}
+                    chips={chipsFor(section.key)}
+                    displayName={displayName}
+                    draggedKey={draggedKey}
+                    setDraggedKey={setDraggedKey}
+                    onPlace={placeHelping}
+                    emptyHint="Drag attributes into this section."
+                  />
+                </div>
+              ))}
+
+              <div>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={addSection}>
+                  Add section
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+    </div>
+  )
+}
+
+// A drop target on the Specification layout: the unsectioned run or one section.
+// Chips are the shown attributes, draggable between buckets. Native HTML5 drag,
+// the same mechanism the attributes screen uses to reorder values - no library.
+function SpecBucket({
+  sectionKey,
+  chips,
+  displayName,
+  draggedKey,
+  setDraggedKey,
+  onPlace,
+  emptyHint,
+}: {
+  sectionKey: string | null
+  chips: Helping[]
+  displayName: (h: Helping) => string
+  draggedKey: string | null
+  setDraggedKey: (key: string | null) => void
+  onPlace: (draggedKey: string, sectionKey: string | null, beforeKey: string | null) => void
+  emptyHint: string
+}) {
+  return (
+    <div
+      onDragOver={(e) => {
+        if (draggedKey) e.preventDefault()
+      }}
+      onDrop={(e) => {
+        e.preventDefault()
+        if (draggedKey) onPlace(draggedKey, sectionKey, null)
+        setDraggedKey(null)
+      }}
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '0.375rem',
+        minHeight: '2.25rem',
+        alignItems: 'center',
+        padding: '0.375rem',
+        borderRadius: 'var(--radius-sm)',
+        border: '1px dashed var(--color-border)',
+        background: 'var(--color-surface)',
+      }}
+    >
+      {chips.length === 0 ? (
+        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', padding: '0 0.25rem' }}>{emptyHint}</span>
+      ) : (
+        chips.map((h) => (
+          <span
+            key={h.key}
+            draggable
+            onDragStart={(e) => {
+              setDraggedKey(h.key)
+              e.dataTransfer.effectAllowed = 'move'
+            }}
+            onDragEnd={() => setDraggedKey(null)}
+            onDragOver={(e) => {
+              if (draggedKey && draggedKey !== h.key) {
+                e.preventDefault()
+                e.stopPropagation()
+              }
+            }}
+            onDrop={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              if (draggedKey && draggedKey !== h.key) onPlace(draggedKey, sectionKey, h.key)
+              setDraggedKey(null)
+            }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.375rem',
+              cursor: 'grab',
+              fontSize: '0.8125rem',
+              padding: '0.25rem 0.5rem',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--color-border)',
+              background: 'var(--color-bg-subtle)',
+              color: 'var(--color-text)',
+              opacity: draggedKey === h.key ? 0.5 : 1,
+            }}
+          >
+            <span aria-hidden style={{ color: 'var(--color-text-muted)' }}>⠿</span>
+            {displayName(h)}
+          </span>
+        ))
+      )}
     </div>
   )
 }

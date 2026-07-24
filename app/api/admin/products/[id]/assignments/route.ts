@@ -7,6 +7,7 @@ import {
   clearImportedValuesForProduct,
 } from '@/modules/product-attributes-for-shop/lib/db/assignments'
 import { getProductAttributes, setProductAttributes } from '@/modules/product-attributes-for-shop/lib/db/membership'
+import { listProductSpecSections, setProductSpecSections } from '@/modules/product-attributes-for-shop/lib/db/spec-sections'
 import { listVariantsForProduct } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
 import { listAttributes } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 
@@ -19,19 +20,34 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const gate = await requireShopUser('shop.products', { allowAccess: true })
   if (gate.error) return gate.error
   const { id } = await params
-  const [attributes, assignments, membership, variants] = await Promise.all([
+  const [attributes, assignments, membership, variants, sections] = await Promise.all([
     listAttributes(),
     getProductAssignments(id),
     getProductAttributes(id),
     listVariantsForProduct(id),
+    listProductSpecSections(id),
   ])
-  return NextResponse.json({ attributes, assignments, membership, variants })
+  return NextResponse.json({ attributes, assignments, membership, variants, sections })
 }
 
 // The set is submitted in display order, each helping carrying the values ticked
 // under it. Existing helpings send the id they already have; a newly added one
 // sends none and gets one back.
 const PutBody = z.object({
+  // The product's Specification sections, in display order. Each carries a `key`
+  // the editor also uses on a helping's `specSectionKey`, so a helping can point
+  // at a section that has no saved id yet. A kept section sends its id too.
+  sections: z
+    .array(
+      z.object({
+        id: z.string().nullable().optional(),
+        key: z.string(),
+        name: z.string().max(120),
+        position: z.number().int().min(0),
+      }),
+    )
+    .max(100)
+    .default([]),
   membership: z
     .array(
       z.object({
@@ -42,6 +58,12 @@ const PutBody = z.object({
         nameOverride: z.string().max(120).nullable().optional(),
         useForVariations: z.boolean(),
         showInFilters: z.boolean(),
+        // Specification-tab placement. `specSectionKey` names one of the sections
+        // above by its `key` (null = the unsectioned run); it is resolved to a
+        // saved section id once the sections are written.
+        showInSpec: z.boolean().default(false),
+        specSectionKey: z.string().nullable().default(null),
+        specPosition: z.number().int().min(0).default(0),
         // Product-level ticks for this helping. Ignored when it is used for
         // variations - the value then belongs to each variant, not the product.
         values: z.array(z.string()).max(500).default([]),
@@ -56,7 +78,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params
   const parsed = PutBody.safeParse(await request.json())
   if (!parsed.success) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
-  const { membership } = parsed.data
+  const { membership, sections } = parsed.data
 
   // Two helpings of one attribute must go by different names, and only one of
   // them may go by the attribute's own. Enforced here as well as in the editor
@@ -80,12 +102,34 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   // check above is what keeps the two columns (and their CSV headers) apart, so
   // there is nothing further to refuse here.
 
+  // Sections first, so their saved ids exist before a helping's spec_section_id
+  // is written against one (the FK would otherwise refuse it). The returned map
+  // turns the editor's section `key` into that saved id; a helping naming a
+  // section that was dropped in the same save resolves to null and lands in the
+  // unsectioned run. Not one atomic transaction with the writes below, matching
+  // this route's existing set-then-values sequence.
+  const sectionIdByKey = await setProductSpecSections(id, sections)
+
   // Save the set, then clear assignments for any attribute dropped from it, so a
   // removed attribute stops dragging the product into its filter. Only genuinely
   // gone attributes count - one whose second helping was removed is still on the
   // product and keeps its values.
   const before = await getProductAttributes(id)
-  const assignmentIds = await setProductAttributes(id, membership)
+  const assignmentIds = await setProductAttributes(
+    id,
+    membership.map((m) => ({
+      id: m.id,
+      attributeId: m.attributeId,
+      nameOverride: m.nameOverride,
+      useForVariations: m.useForVariations,
+      showInFilters: m.showInFilters,
+      // A per-variant helping never shows as a static spec row, so its flag is
+      // forced off rather than trusted from the client.
+      showInSpec: m.useForVariations ? false : m.showInSpec,
+      specSectionId: m.specSectionKey ? sectionIdByKey.get(m.specSectionKey) ?? null : null,
+      specPosition: m.specPosition,
+    })),
+  )
   const keptAttributeIds = new Set(membership.map((m) => m.attributeId))
   const removed = [...new Set(before.map((m) => m.attributeId))].filter((a) => !keptAttributeIds.has(a))
   if (removed.length > 0) await clearImportedValuesForProduct(id, removed)
