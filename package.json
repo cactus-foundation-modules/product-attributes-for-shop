@@ -1,6 +1,6 @@
 {
   "name": "cactus-module-product-attributes-for-shop",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "description": "Filterable product attributes for the Cactus shop",
   "license": "MIT",
   "private": true

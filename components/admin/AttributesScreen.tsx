@@ -5,6 +5,11 @@ import type { PatAttributeGroup, PatAttributeWithValues, PatControlType } from '
 import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
 import { SwatchImagePicker } from '@/modules/product-attributes-for-shop/components/admin/SwatchImagePicker'
 
+// How many values a card shows before it asks. An attribute like Colour can run
+// to several hundred, and drawing every chip up front buries the rest of the
+// screen - and the Add value box with it.
+const VALUE_PAGE_SIZE = 30
+
 const CONTROL_LABELS: Record<PatControlType, string> = {
   CHECKBOX: 'Tick list',
   SWATCH: 'Colour swatches',
@@ -403,6 +408,9 @@ function AttributeCard({
   // or material list runs much longer than a handful of attributes, and a chip
   // has no room for two extra buttons anyway.
   const [draggedValueId, setDraggedValueId] = useState<string | null>(null)
+  // How much of a long value list is on show. Kept per card, so opening up
+  // Colour does not also unfold every other attribute on the page.
+  const [visibleValues, setVisibleValues] = useState(VALUE_PAGE_SIZE)
   const base = '/api/m/product-attributes-for-shop/admin'
   const isSwatch = attribute.controlType === 'SWATCH'
   const isImage = attribute.controlType === 'IMAGE'
@@ -420,7 +428,15 @@ function AttributeCard({
     // The picture and its size are cleared alongside the label: they belonged to
     // the value just added, and leaving them loaded would quietly give the next
     // value the same ones.
-    if (ok) { setNewValue(''); setNewImage(null); setNewSwatchSize('') }
+    // A new value joins the end of the list, so the window is widened enough to
+    // include it - otherwise adding one to a long attribute looks like nothing
+    // happened at all.
+    if (ok) {
+      setNewValue('')
+      setNewImage(null)
+      setNewSwatchSize('')
+      setVisibleValues((n) => Math.max(n, attribute.values.length + 1))
+    }
   }
 
   // A rename can reach further than this screen, so say how far. Options that
@@ -491,6 +507,9 @@ function AttributeCard({
     }
     setRenameNote(parts.length > 0 ? parts.join(' ') : null)
   }
+
+  const shownValues = attribute.values.slice(0, visibleValues)
+  const hiddenValueCount = attribute.values.length - shownValues.length
 
   return (
     <section style={{ border: '1px solid var(--color-border)', borderRadius: 12, padding: '1rem 1.25rem', background: 'var(--color-surface)' }}>
@@ -576,7 +595,7 @@ function AttributeCard({
         {attribute.values.length === 0 && (
           <span style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)' }}>No values yet.</span>
         )}
-        {attribute.values.map((value) => (
+        {shownValues.map((value) => (
           <span
             key={value.id}
             onDragOver={(e) => { if (draggedValueId) e.preventDefault() }}
@@ -713,6 +732,39 @@ function AttributeCard({
             </button>
           </span>
         ))}
+        {/* Only drawn when there is something left to draw, and it says how much
+            is left: "Load more" on its own gives no idea whether one more press
+            finishes the job or forty do. Show all is there for the shop that
+            genuinely wants all six hundred at once. */}
+        {hiddenValueCount > 0 && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem' }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setVisibleValues((n) => n + VALUE_PAGE_SIZE)}
+            >
+              Load more ({hiddenValueCount} more)
+            </button>
+            {hiddenValueCount > VALUE_PAGE_SIZE && (
+              <button
+                type="button"
+                onClick={() => setVisibleValues(attribute.values.length)}
+                style={{
+                  border: 0,
+                  background: 'none',
+                  padding: 0,
+                  font: 'inherit',
+                  color: 'var(--color-text-muted)',
+                  cursor: 'pointer',
+                  textDecoration: 'underline dotted',
+                  textUnderlineOffset: '0.2em',
+                }}
+              >
+                Show all {attribute.values.length}
+              </button>
+            )}
+          </span>
+        )}
       </div>
 
       <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
