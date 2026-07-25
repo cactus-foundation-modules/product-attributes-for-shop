@@ -425,11 +425,12 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
     specHelpings
       .filter((h) => (h.specSectionKey ?? null) === sectionKey)
       .sort((a, b) => a.specPosition - b.specPosition)
-  // Product-level attributes not currently on the page - the pool a shop owner
-  // drags from. A variation helping has no single value, so it never joins the
-  // spec and stays out of this pool.
+  // Attributes not currently on the page - the pool a shop owner drags from.
+  // Both ordinary and per-variant helpings qualify: an ordinary one shows its
+  // ticked value, a per-variant one shows its variants' distinct values, so
+  // either can be listed and grouped on the Specification tab.
   const notShownHelpings = helpings.filter(
-    (h) => !h.useForVariations && !h.showInSpec && attributeById.has(h.attributeId),
+    (h) => !h.showInSpec && attributeById.has(h.attributeId),
   )
 
   return (
@@ -531,11 +532,11 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                                 ...prev,
                                 useForVariations: e.target.checked,
                                 // Its values move to the variants, so they stop
-                                // sitting on the product as a whole - and with no
-                                // single value it has no place in the spec either.
+                                // sitting on the product as a whole. Any spec
+                                // placement stays put: a per-variant helping can
+                                // still show on the page, drawing its variants'
+                                // distinct values instead of a single ticked one.
                                 values: e.target.checked ? new Set<string>() : prev.values,
-                                showInSpec: e.target.checked ? false : prev.showInSpec,
-                                specSectionKey: e.target.checked ? null : prev.specSectionKey,
                               }))}
                             />
                             Use for variations
@@ -635,18 +636,16 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
             Drag any attribute from <strong>Not shown</strong> onto the page to list it on the product&rsquo;s
             Specification tab. Add a section - &ldquo;Mechanisms&rdquo;, &ldquo;Guarantee&rdquo; - and drop
             attributes into it to group them under that heading. Anything shown but left loose sits above the first
-            heading. Drag one back to <strong>Not shown</strong> to take it off the page.
+            heading. Drag one back to <strong>Not shown</strong> to take it off the page. A per-variant attribute
+            shows the distinct values its variants use, so it can be grouped here too.
           </p>
 
-          {/* When nothing is eligible for the spec, say why and what to do - a
-              product whose only attributes vary per variant (a chair that is all
-              colour/size options, say) has no single value to list, so the buckets
-              below would otherwise be an unexplained row of empties. */}
+          {/* Nothing to place yet - the product has no attributes (or every one
+              has since been deleted shop-wide), so the buckets below would
+              otherwise be an unexplained row of empties. */}
           {specHelpings.length === 0 && notShownHelpings.length === 0 && (
             <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
-              {helpings.length > 0
-                ? 'The attributes on this product are all set to vary per variant, which have no single value to show here. Add an ordinary attribute above - leave “Use for variations” unticked - such as “Gas height adjustment” with the value “Yes”, and it turns up below to drag onto the page.'
-                : 'Add an attribute to this product above, then it turns up here to drag onto the page.'}
+              Add an attribute to this product above, then it turns up here to drag onto the page.
             </p>
           )}
 
@@ -738,7 +737,7 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
               draggedKey={draggedKey}
               setDraggedKey={setDraggedKey}
               onPlace={placeHelping}
-              emptyHint="Ordinary attributes you're not showing sit here. Drag one onto the page above, or drag a shown one back here."
+              emptyHint="Attributes you're not showing sit here. Drag one onto the page above, or drag a shown one back here."
             />
           </div>
         </section>

@@ -123,9 +123,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       nameOverride: m.nameOverride,
       useForVariations: m.useForVariations,
       showInFilters: m.showInFilters,
-      // A per-variant helping never shows as a static spec row, so its flag is
-      // forced off rather than trusted from the client.
-      showInSpec: m.useForVariations ? false : m.showInSpec,
+      // A per-variant helping may show on the spec too: it has no single value on
+      // the product, so the public view draws its variants' distinct values (see
+      // spec-view.ts). The flag is trusted for either kind of helping now.
+      showInSpec: m.showInSpec,
       specSectionId: m.specSectionKey ? sectionIdByKey.get(m.specSectionKey) ?? null : null,
       specPosition: m.specPosition,
     })),
