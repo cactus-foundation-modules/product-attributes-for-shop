@@ -2,12 +2,15 @@ import {
   listProductLevelColumns,
   ensureAttributeValueByLabel,
   findAttributeValueByLabel,
+  listAllAttributes,
+  upsertProductLevelAttribute,
 } from '@/modules/product-attributes-for-shop/lib/db/membership'
 import {
   getProductOwnValuesByAssignment,
   getProductOwnValueIdsByAssignment,
   setProductAssignmentValues,
 } from '@/modules/product-attributes-for-shop/lib/db/assignments'
+import { CSV_COLUMNS } from '@/modules/shop/lib/csv'
 
 // Contributes one Products-tab column per product-level attribute a product uses,
 // through shop's `product-field-provider` point. The product-level twin of this
@@ -37,6 +40,34 @@ async function columnsFor(productId: string): Promise<PatProductLevelColumn[]> {
   return cols
 }
 
+// The whole attribute vocabulary keyed by lower-cased name, cached like the
+// columns above. Lets an import match a Products-tab column heading to the
+// attribute it names even when the product does not use that attribute at product
+// level yet, so a value typed there can auto-attach the attribute. The product
+// twin of the variant field provider's own attributesByName.
+const attrNameCache = { map: null as Map<string, { id: string; name: string }> | null, at: 0 }
+async function attributesByName(): Promise<Map<string, { id: string; name: string }>> {
+  if (attrNameCache.map && Date.now() - attrNameCache.at < CACHE_TTL_MS) return attrNameCache.map
+  const all = await listAllAttributes()
+  const map = new Map(all.map((a) => [a.name.trim().toLowerCase(), { id: a.id, name: a.name }]))
+  attrNameCache.map = map
+  attrNameCache.at = Date.now()
+  return map
+}
+
+// Products-tab headings that belong to shop's own fixed CSV columns, never to an
+// attribute. An auto-attach match against one of these is refused, so an attribute
+// the owner happens to have named "Supplier" can never hijack the real supplier
+// column. CSV_COLUMNS are already lower-case snake_case, the same shape the keys
+// below are compared in.
+const RESERVED_PRODUCT_HEADERS: ReadonlySet<string> = new Set(CSV_COLUMNS)
+
+// Is this heading eligible to auto-attach an attribute? It must not already be one
+// of the product's product-level columns, nor a fixed product column.
+function isAutoAttachHeader(key: string, assignedNames: ReadonlySet<string>): boolean {
+  return !assignedNames.has(key) && !RESERVED_PRODUCT_HEADERS.has(key)
+}
+
 const VALUE_SEPARATOR = ', '
 function serialiseLabels(labels: string[]): string {
   return labels.join(VALUE_SEPARATOR)
@@ -57,10 +88,15 @@ function sameSet(a: Set<string>, b: Set<string>): boolean {
 type ProdImportCtx = {
   current: Map<string, Map<string, Set<string>>>
   labelCache: Map<string, string | null>
+  // Attributes auto-attached at product level during this import, attribute id ->
+  // the assignment id it got. Keeps the upsert to once per attribute per product
+  // rather than once per row - a product is a single row on the Products tab, so
+  // this is keyed product id -> attribute id -> assignment id.
+  assigned: Map<string, Map<string, string>>
 }
 
 function isProdImportCtx(ctx: unknown): ctx is ProdImportCtx {
-  return !!ctx && typeof ctx === 'object' && 'current' in ctx && 'labelCache' in ctx
+  return !!ctx && typeof ctx === 'object' && 'current' in ctx && 'labelCache' in ctx && 'assigned' in ctx
 }
 
 function currentValueIds(ctx: unknown, productId: string, assignmentId: string): Set<string> {
@@ -93,39 +129,87 @@ export const productAttributesProductFieldProvider = {
       for (const [assignmentId, valueIds] of Object.entries(byAssignment)) assignmentMap.set(assignmentId, new Set(valueIds))
       current.set(productId, assignmentMap)
     }
-    return { current, labelCache: new Map() }
+    return { current, labelCache: new Map(), assigned: new Map() }
   },
 
   async applyImportedRow(productId: string, row: Record<string, string>, ctx?: unknown): Promise<boolean> {
     const cols = await columnsFor(productId)
-    if (cols.length === 0) return false
     const importCtx = isProdImportCtx(ctx) ? ctx : undefined
     const rowByLower = new Map(Object.entries(row).map(([k, v]) => [k.trim().toLowerCase(), v]))
     let changed = false
-    for (const col of cols) {
-      const key = col.name.trim().toLowerCase()
-      if (!rowByLower.has(key)) continue // column not in the sheet - leave this helping alone
+
+    // Resolves a cell's comma-separated labels to the value ids to tick, ensuring
+    // (creating) each label the attribute has not seen yet, caching each lookup so
+    // the same label across products is only ensured once.
+    const resolveWanted = async (attributeId: string, cell: string): Promise<Set<string>> => {
       const wanted = new Set<string>()
-      for (const label of parseLabels(rowByLower.get(key) ?? '')) {
-        const cacheKey = `${col.attributeId}|${label.toLowerCase()}`
+      for (const label of parseLabels(cell)) {
+        const cacheKey = `${attributeId}|${label.toLowerCase()}`
         let valueId: string | null
         if (importCtx?.labelCache.has(cacheKey)) {
           valueId = importCtx.labelCache.get(cacheKey) ?? null
         } else {
-          valueId = await ensureAttributeValueByLabel(col.attributeId, label)
+          valueId = await ensureAttributeValueByLabel(attributeId, label)
           importCtx?.labelCache.set(cacheKey, valueId)
         }
         if (valueId) wanted.add(valueId)
       }
-      if (sameSet(currentValueIds(importCtx, productId, col.assignmentId), wanted)) continue
-      await setProductAssignmentValues(productId, col.assignmentId, [...wanted])
+      return wanted
+    }
+    // Writes one helping's ticks when they differ from what is stored, keeping the
+    // context current so nothing writes twice.
+    const applyAssignment = async (attributeId: string, assignmentId: string, cell: string): Promise<void> => {
+      const wanted = await resolveWanted(attributeId, cell)
+      if (sameSet(currentValueIds(importCtx, productId, assignmentId), wanted)) return
+      await setProductAssignmentValues(productId, assignmentId, [...wanted])
       changed = true
       if (importCtx) {
         const byAssignment = importCtx.current.get(productId) ?? new Map<string, Set<string>>()
-        byAssignment.set(col.assignmentId, wanted)
+        byAssignment.set(assignmentId, wanted)
         importCtx.current.set(productId, byAssignment)
       }
     }
+
+    for (const col of cols) {
+      const key = col.name.trim().toLowerCase()
+      if (!rowByLower.has(key)) continue // column not in the sheet - leave this helping alone
+      await applyAssignment(col.attributeId, col.assignmentId, rowByLower.get(key) ?? '')
+    }
+
+    // Auto-attach. A value typed into a Products-tab column that names an existing
+    // attribute this product does not use at product level yet attaches that
+    // attribute (as a product-level helping) and ticks the value(s) - so an
+    // existing attribute can be put onto any product straight from the sheet, the
+    // same way the Variations tab does for variation attributes. Only a heading
+    // matching an EXISTING attribute acts; an unknown heading is the owner's own
+    // column and is left alone, a fixed product column can never be hijacked, and
+    // a blank cell never creates an assignment.
+    const assignedNames = new Set(cols.map((c) => c.name.trim().toLowerCase()))
+    const attrByName = await attributesByName()
+    for (const [rawKey, rawVal] of Object.entries(row)) {
+      const key = rawKey.trim().toLowerCase()
+      if (!isAutoAttachHeader(key, assignedNames)) continue
+      const cell = rawVal ?? ''
+      if (parseLabels(cell).length === 0) continue
+      const attr = attrByName.get(key)
+      if (!attr) continue
+      // Get-or-make the product-level assignment, once per attribute per product.
+      // Returns null when the only helping for the attribute is a variation one -
+      // that slot is never flipped, so the product is left alone.
+      let assignmentId = importCtx?.assigned.get(productId)?.get(attr.id)
+      if (!assignmentId) {
+        const made = await upsertProductLevelAttribute(productId, attr.id)
+        if (!made) continue
+        assignmentId = made
+        if (importCtx) {
+          const byAttr = importCtx.assigned.get(productId) ?? new Map<string, string>()
+          byAttr.set(attr.id, assignmentId)
+          importCtx.assigned.set(productId, byAttr)
+        }
+      }
+      await applyAssignment(attr.id, assignmentId, cell)
+    }
+
     return changed
   },
 
@@ -135,7 +219,6 @@ export const productAttributesProductFieldProvider = {
   // tick it, so it always counts as a change.
   async rowChanged(productId: string, row: Record<string, string>, ctx?: unknown): Promise<boolean> {
     const cols = await columnsFor(productId)
-    if (cols.length === 0) return false
     const importCtx = isProdImportCtx(ctx) ? ctx : undefined
     const rowByLower = new Map(Object.entries(row).map(([k, v]) => [k.trim().toLowerCase(), v]))
     for (const col of cols) {
@@ -153,6 +236,22 @@ export const productAttributesProductFieldProvider = {
         wanted.add(valueId)
       }
       if (!sameSet(currentValueIds(importCtx, productId, col.assignmentId), wanted)) return true
+    }
+
+    // Auto-attach detection, read-only twin of the block in applyImportedRow. A
+    // non-empty value in a Products-tab column that names an existing attribute
+    // this product does not use at product level yet would attach it and tick the
+    // value on apply - nothing is stored against it, so it counts as a change.
+    // Creates nothing. (May over-report the rare case where only a variation
+    // helping exists and apply would decline: the row then goes through as a
+    // no-op, slower but never wrong.)
+    const assignedNames = new Set(cols.map((c) => c.name.trim().toLowerCase()))
+    const attrByName = await attributesByName()
+    for (const [rawKey, rawVal] of Object.entries(row)) {
+      const key = rawKey.trim().toLowerCase()
+      if (!isAutoAttachHeader(key, assignedNames)) continue
+      if (parseLabels(rawVal ?? '').length === 0) continue
+      if (attrByName.has(key)) return true
     }
     return false
   },

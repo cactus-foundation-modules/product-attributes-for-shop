@@ -12,11 +12,18 @@ const findAttributeValueByLabel = vi.fn(async (_a: string, label: string): Promi
 const getProductOwnValuesByAssignment = vi.fn(async (_ids: string[]): Promise<Record<string, Record<string, string[]>>> => ({}))
 const getProductOwnValueIdsByAssignment = vi.fn(async (_ids: string[]): Promise<Record<string, Record<string, string[]>>> => ({}))
 const setProductAssignmentValues = vi.fn(async (_p: string, _a: string, _v: string[]) => {})
+// Attribute vocabulary for auto-attach: "Fabric" is a known attribute a product
+// may not yet use at product level. Empty by default so the base cases (no
+// auto-attach) behave exactly as before; cases that exercise auto-attach seed it.
+const listAllAttributes = vi.fn(async (): Promise<{ id: string; name: string }[]> => [])
+const upsertProductLevelAttribute = vi.fn(async (_p: string, _a: string): Promise<string | null> => null)
 
 vi.mock('@/modules/product-attributes-for-shop/lib/db/membership', () => ({
   listProductLevelColumns: (...a: unknown[]) => listProductLevelColumns(...(a as [string])),
   ensureAttributeValueByLabel: (...a: unknown[]) => ensureAttributeValueByLabel(...(a as [string, string])),
   findAttributeValueByLabel: (...a: unknown[]) => findAttributeValueByLabel(...(a as [string, string])),
+  listAllAttributes: (...a: unknown[]) => listAllAttributes(...(a as [])),
+  upsertProductLevelAttribute: (...a: unknown[]) => upsertProductLevelAttribute(...(a as [string, string])),
 }))
 vi.mock('@/modules/product-attributes-for-shop/lib/db/assignments', () => ({
   getProductOwnValuesByAssignment: (...a: unknown[]) => getProductOwnValuesByAssignment(...(a as [string[]])),
@@ -36,6 +43,13 @@ beforeEach(() => {
   getProductOwnValuesByAssignment.mockClear()
   getProductOwnValueIdsByAssignment.mockClear()
   setProductAssignmentValues.mockClear()
+  listAllAttributes.mockClear()
+  // "Fabric" is a known attribute throughout; the provider caches this vocabulary
+  // for 10s (longer than the suite), so it must stay constant across tests. Base
+  // cases never use a "Fabric" header, so they see no auto-attach.
+  listAllAttributes.mockResolvedValue([{ id: 'attr-fabric', name: 'Fabric' }])
+  upsertProductLevelAttribute.mockClear()
+  upsertProductLevelAttribute.mockResolvedValue(null)
 })
 
 describe('productAttributesProductFieldProvider columns and values', () => {
@@ -99,6 +113,74 @@ describe('productAttributesProductFieldProvider.applyImportedRow', () => {
     const changed = await provider.applyImportedRow(nextProduct(), { Markup: 'Green' }, ctx)
     expect(changed).toBe(true)
     expect(setProductAssignmentValues).toHaveBeenCalledWith(expect.any(String), 'asg1', ['v-green'])
+  })
+})
+
+describe('productAttributesProductFieldProvider.applyImportedRow auto-attach', () => {
+  it('attaches an existing attribute typed into a new column and ticks the value', async () => {
+    const p = nextProduct()
+    upsertProductLevelAttribute.mockResolvedValueOnce('asg-fabric')
+    const ctx = await provider.beginImport([p])
+    const changed = await provider.applyImportedRow(p, { Markup: '', Fabric: 'Velvet' }, ctx)
+    expect(changed).toBe(true)
+    expect(upsertProductLevelAttribute).toHaveBeenCalledWith(p, 'attr-fabric')
+    expect(setProductAssignmentValues).toHaveBeenCalledWith(p, 'asg-fabric', ['v-velvet'])
+  })
+
+  it('ticks several values for a multi-select auto-attach cell', async () => {
+    const p = nextProduct()
+    upsertProductLevelAttribute.mockResolvedValueOnce('asg-fabric')
+    const ctx = await provider.beginImport([p])
+    await provider.applyImportedRow(p, { Fabric: 'Velvet, Cotton' }, ctx)
+    expect(setProductAssignmentValues).toHaveBeenCalledWith(p, 'asg-fabric', ['v-velvet', 'v-cotton'])
+  })
+
+  it('never touches a fixed product column that shares an attribute name', async () => {
+    const p = nextProduct()
+    // "Supplier" is a fixed CSV column, so even if an attribute were named that it
+    // must not auto-attach. No attribute here is named Supplier anyway.
+    const ctx = await provider.beginImport([p])
+    const changed = await provider.applyImportedRow(p, { supplier: 'Acme' }, ctx)
+    expect(changed).toBe(false)
+    expect(upsertProductLevelAttribute).not.toHaveBeenCalled()
+  })
+
+  it('leaves the product alone when only a variation helping exists (upsert declines)', async () => {
+    const p = nextProduct()
+    upsertProductLevelAttribute.mockResolvedValueOnce(null) // slot owned by a variation helping
+    const ctx = await provider.beginImport([p])
+    const changed = await provider.applyImportedRow(p, { Fabric: 'Velvet' }, ctx)
+    expect(changed).toBe(false)
+    expect(setProductAssignmentValues).not.toHaveBeenCalled()
+  })
+
+  it('does not attach an unknown column heading', async () => {
+    const p = nextProduct()
+    const ctx = await provider.beginImport([p])
+    const changed = await provider.applyImportedRow(p, { 'Made Up': 'x' }, ctx)
+    expect(changed).toBe(false)
+    expect(upsertProductLevelAttribute).not.toHaveBeenCalled()
+  })
+})
+
+describe('productAttributesProductFieldProvider.rowChanged auto-attach (read-only)', () => {
+  it('flags a value typed into a new attribute column as a change', async () => {
+    const p = nextProduct()
+    const ctx = await provider.beginImport([p])
+    expect(await provider.rowChanged(p, { Fabric: 'Velvet' }, ctx)).toBe(true)
+    expect(upsertProductLevelAttribute).not.toHaveBeenCalled()
+  })
+
+  it('is false for a blank cell in a new attribute column', async () => {
+    const p = nextProduct()
+    const ctx = await provider.beginImport([p])
+    expect(await provider.rowChanged(p, { Fabric: '' }, ctx)).toBe(false)
+  })
+
+  it('is false for a fixed product column', async () => {
+    const p = nextProduct()
+    const ctx = await provider.beginImport([p])
+    expect(await provider.rowChanged(p, { supplier: 'Acme' }, ctx)).toBe(false)
   })
 })
 

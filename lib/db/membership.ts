@@ -131,6 +131,40 @@ export async function upsertProductAttribute(
   return rows[0]?.id ?? null
 }
 
+// Get-or-make a PRODUCT-LEVEL (non use-for-variations) helping for an attribute,
+// for the Products-tab auto-attach: a value typed into a column that names an
+// attribute the product does not yet carry at product level attaches it. The twin
+// of upsertProductAttribute's use for the Variations tab, but with one crucial
+// difference - it must never flip an existing helping's use_for_variations. The
+// un-named slot for a (product, attribute) is unique, so a product already using
+// the attribute FOR VARIATIONS owns that slot; hijacking it (as a plain upsert's
+// DO UPDATE would) would tear the attribute off every variant. So: try to create a
+// product-level un-named helping, DO NOTHING on conflict, and otherwise reuse only
+// a helping that is ALREADY product-level. When the only helping is a variation
+// one, return null and the caller leaves the product alone.
+export async function upsertProductLevelAttribute(
+  productId: string,
+  attributeId: string,
+): Promise<string | null> {
+  const inserted = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "pat_product_attributes"
+      ("product_id", "attribute_id", "name_override", "use_for_variations", "show_in_filters")
+    SELECT ${productId}, a."id", ${null}, false, false
+    FROM "pat_attributes" a WHERE a."id" = ${attributeId}
+    ON CONFLICT ("product_id", "attribute_id", "name_override") DO NOTHING
+    RETURNING "id"
+  `
+  if (inserted[0]) return inserted[0].id
+  // Conflict (the un-named slot is taken) or no such attribute. Reuse a helping
+  // only when it is already product-level; a variation helping is left untouched.
+  const existing = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "pat_product_attributes"
+    WHERE "product_id" = ${productId} AND "attribute_id" = ${attributeId} AND "use_for_variations" = false
+    ORDER BY "position" ASC LIMIT 1
+  `
+  return existing[0]?.id ?? null
+}
+
 // Every attribute's id and name, for matching a sheet column heading back to the
 // attribute it names. Used by the Variations import to let a value typed into a
 // column for an attribute a product does not yet use auto-attach that attribute
