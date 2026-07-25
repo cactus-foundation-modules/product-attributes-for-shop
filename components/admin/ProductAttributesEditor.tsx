@@ -269,22 +269,6 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
     })
   }
 
-  // Turns a helping on or off in the Specification tab. Turning it on drops it at
-  // the end of the unsectioned run; turning it off frees its placement so it does
-  // not reappear where it was if switched back on later.
-  function toggleShowInSpec(key: string) {
-    setHelpings((prev) => {
-      const target = prev.find((h) => h.key === key)
-      if (!target) return prev
-      if (target.showInSpec) {
-        return prev.map((h) => (h.key === key ? { ...h, showInSpec: false, specSectionKey: null } : h))
-      }
-      const nextPos = prev.filter((h) => h.showInSpec && h.specSectionKey == null).length
-      return prev.map((h) => (h.key === key ? { ...h, showInSpec: true, specSectionKey: null, specPosition: nextPos } : h))
-    })
-    setStatus(null)
-  }
-
   function addSection() {
     setSections((prev) => [...prev, { key: nextSectionKey(), id: null, name: '' }])
     setStatus(null)
@@ -321,10 +305,18 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
   }
 
   // Drops the dragged helping into a section (null = the unsectioned run) just
-  // before `beforeKey`, or at the end when it is null. Only the target run's
-  // positions are renumbered; the source run keeps its order (gaps are harmless,
-  // everything reads back sorted by position).
-  function placeHelping(draggedKeyArg: string, sectionKey: string | null, beforeKey: string | null) {
+  // before `beforeKey`, or at the end when it is null. `hidden` means it was
+  // dropped back into the "Not shown" pool, so it comes off the page entirely.
+  // Only the target run's positions are renumbered; the source run keeps its
+  // order (gaps are harmless, everything reads back sorted by position).
+  function placeHelping(draggedKeyArg: string, sectionKey: string | null, beforeKey: string | null, hidden = false) {
+    if (hidden) {
+      setHelpings((prev) =>
+        prev.map((h) => (h.key === draggedKeyArg ? { ...h, showInSpec: false, specSectionKey: null } : h)),
+      )
+      setStatus(null)
+      return
+    }
     setHelpings((prev) => {
       let next = prev.map((h) =>
         h.key === draggedKeyArg ? { ...h, showInSpec: true, specSectionKey: sectionKey } : h,
@@ -433,6 +425,12 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
     specHelpings
       .filter((h) => (h.specSectionKey ?? null) === sectionKey)
       .sort((a, b) => a.specPosition - b.specPosition)
+  // Product-level attributes not currently on the page - the pool a shop owner
+  // drags from. A variation helping has no single value, so it never joins the
+  // spec and stays out of this pool.
+  const notShownHelpings = helpings.filter(
+    (h) => !h.useForVariations && !h.showInSpec && attributeById.has(h.attributeId),
+  )
 
   return (
     <div className="spe-panel">
@@ -556,16 +554,6 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                           />
                           Show in shop filters
                         </label>
-                        {!h.useForVariations && (
-                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.8125rem' }}>
-                            <input
-                              type="checkbox"
-                              checked={h.showInSpec}
-                              onChange={() => toggleShowInSpec(h.key)}
-                            />
-                            Show in specification
-                          </label>
-                        )}
                       </div>
 
                       {h.useForVariations ? (
@@ -644,92 +632,103 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
         <section className="spe-section" style={{ marginTop: '1.5rem' }}>
           <h3 className="spe-section-head">Specification layout</h3>
           <p className="spe-section-blurb">
-            Everything ticked <strong>Show in specification</strong> above appears on the product page&rsquo;s
-            Specification tab. Group related ones under a heading of your own - &ldquo;Mechanisms&rdquo;,
-            &ldquo;Guarantee&rdquo; - by adding a section and dragging attributes into it. Anything left loose sits
-            above the first heading.
+            Drag any attribute from <strong>Not shown</strong> onto the page to list it on the product&rsquo;s
+            Specification tab. Add a section - &ldquo;Mechanisms&rdquo;, &ldquo;Guarantee&rdquo; - and drop
+            attributes into it to group them under that heading. Anything shown but left loose sits above the first
+            heading. Drag one back to <strong>Not shown</strong> to take it off the page.
           </p>
 
-          {specHelpings.length === 0 && sections.length === 0 ? (
-            <p className="spe-empty">
-              Nothing shown in the specification yet. Tick &ldquo;Show in specification&rdquo; on an attribute above,
-              then arrange it here.
-            </p>
-          ) : (
-            <div style={{ display: 'grid', gap: '0.75rem' }}>
-              {/* The unsectioned run, shown above the first heading on the page.
-                  Always a drop target so an attribute can be pulled back out of a
-                  section, even when it currently holds nothing. */}
-              <SpecBucket
-                sectionKey={null}
-                chips={chipsFor(null)}
-                displayName={displayName}
-                draggedKey={draggedKey}
-                setDraggedKey={setDraggedKey}
-                onPlace={placeHelping}
-                emptyHint="Drag attributes here to show them above the first heading."
-              />
-
-              {sections.map((section, index) => (
-                <div
-                  key={section.key}
-                  style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}
-                >
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
-                    <input
-                      className="form-control"
-                      style={{ fontSize: '0.8125rem', fontWeight: 600, flex: '1 1 12rem', maxWidth: '20rem' }}
-                      value={section.name}
-                      placeholder="Section name, e.g. Mechanisms"
-                      aria-label="Section name"
-                      onChange={(e) => renameSection(section.key, e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      aria-label="Move section up"
-                      disabled={index === 0}
-                      onClick={() => moveSection(section.key, -1)}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      aria-label="Move section down"
-                      disabled={index === sections.length - 1}
-                      onClick={() => moveSection(section.key, 1)}
-                    >
-                      ↓
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      aria-label={`Remove ${section.name.trim() || 'this'} section`}
-                      onClick={() => removeSection(section.key)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                  <SpecBucket
-                    sectionKey={section.key}
-                    chips={chipsFor(section.key)}
-                    displayName={displayName}
-                    draggedKey={draggedKey}
-                    setDraggedKey={setDraggedKey}
-                    onPlace={placeHelping}
-                    emptyHint="Drag attributes into this section."
-                  />
-                </div>
-              ))}
-
-              <div>
-                <button type="button" className="btn btn-secondary btn-sm" onClick={addSection}>
-                  Add section
-                </button>
-              </div>
+          <div style={{ display: 'grid', gap: '0.75rem' }}>
+            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+              On the Specification tab
             </div>
-          )}
+
+            {/* The unsectioned run, shown above the first heading on the page.
+                Always a drop target so an attribute can be pulled out of a
+                section, even when it currently holds nothing. */}
+            <SpecBucket
+              sectionKey={null}
+              chips={chipsFor(null)}
+              displayName={displayName}
+              draggedKey={draggedKey}
+              setDraggedKey={setDraggedKey}
+              onPlace={placeHelping}
+              emptyHint="Drag attributes here to show them above the first heading."
+            />
+
+            {sections.map((section, index) => (
+              <div
+                key={section.key}
+                style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}
+              >
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <input
+                    className="form-control"
+                    style={{ fontSize: '0.8125rem', fontWeight: 600, flex: '1 1 12rem', maxWidth: '20rem' }}
+                    value={section.name}
+                    placeholder="Section name, e.g. Mechanisms"
+                    aria-label="Section name"
+                    onChange={(e) => renameSection(section.key, e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    aria-label="Move section up"
+                    disabled={index === 0}
+                    onClick={() => moveSection(section.key, -1)}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    aria-label="Move section down"
+                    disabled={index === sections.length - 1}
+                    onClick={() => moveSection(section.key, 1)}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    aria-label={`Remove ${section.name.trim() || 'this'} section`}
+                    onClick={() => removeSection(section.key)}
+                  >
+                    Remove
+                  </button>
+                </div>
+                <SpecBucket
+                  sectionKey={section.key}
+                  chips={chipsFor(section.key)}
+                  displayName={displayName}
+                  draggedKey={draggedKey}
+                  setDraggedKey={setDraggedKey}
+                  onPlace={placeHelping}
+                  emptyHint="Drag attributes into this section."
+                />
+              </div>
+            ))}
+
+            <div>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={addSection}>
+                Add section
+              </button>
+            </div>
+
+            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em', marginTop: '0.25rem' }}>
+              Not shown on the page
+            </div>
+            <SpecBucket
+              sectionKey={null}
+              hidden
+              chips={notShownHelpings}
+              displayName={displayName}
+              draggedKey={draggedKey}
+              setDraggedKey={setDraggedKey}
+              onPlace={placeHelping}
+              emptyHint="Every attribute is on the page. Drag one here to take it off."
+            />
+          </div>
         </section>
       )}
     </div>
@@ -747,14 +746,18 @@ function SpecBucket({
   setDraggedKey,
   onPlace,
   emptyHint,
+  hidden = false,
 }: {
   sectionKey: string | null
   chips: Helping[]
   displayName: (h: Helping) => string
   draggedKey: string | null
   setDraggedKey: (key: string | null) => void
-  onPlace: (draggedKey: string, sectionKey: string | null, beforeKey: string | null) => void
+  onPlace: (draggedKey: string, sectionKey: string | null, beforeKey: string | null, hidden?: boolean) => void
   emptyHint: string
+  // The "Not shown" pool: a drop here takes the attribute off the page rather
+  // than placing it. Its chips are drawn muted to read as parked, not live.
+  hidden?: boolean
 }) {
   return (
     <div
@@ -763,7 +766,7 @@ function SpecBucket({
       }}
       onDrop={(e) => {
         e.preventDefault()
-        if (draggedKey) onPlace(draggedKey, sectionKey, null)
+        if (draggedKey) onPlace(draggedKey, sectionKey, null, hidden)
         setDraggedKey(null)
       }}
       style={{
@@ -799,7 +802,7 @@ function SpecBucket({
             onDrop={(e) => {
               e.preventDefault()
               e.stopPropagation()
-              if (draggedKey && draggedKey !== h.key) onPlace(draggedKey, sectionKey, h.key)
+              if (draggedKey && draggedKey !== h.key) onPlace(draggedKey, sectionKey, h.key, hidden)
               setDraggedKey(null)
             }}
             style={{
@@ -811,8 +814,8 @@ function SpecBucket({
               padding: '0.25rem 0.5rem',
               borderRadius: 'var(--radius-sm)',
               border: '1px solid var(--color-border)',
-              background: 'var(--color-bg-subtle)',
-              color: 'var(--color-text)',
+              background: hidden ? 'var(--color-surface)' : 'var(--color-bg-subtle)',
+              color: hidden ? 'var(--color-text-muted)' : 'var(--color-text)',
               opacity: draggedKey === h.key ? 0.5 : 1,
             }}
           >
