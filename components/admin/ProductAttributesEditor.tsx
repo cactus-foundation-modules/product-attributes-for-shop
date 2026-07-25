@@ -628,7 +628,7 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
         )}
       </section>
 
-      {helpings.some((h) => !h.useForVariations) && (
+      {data.attributes.length > 0 && (
         <section className="spe-section" style={{ marginTop: '1.5rem' }}>
           <h3 className="spe-section-head">Specification layout</h3>
           <p className="spe-section-blurb">
@@ -637,6 +637,18 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
             attributes into it to group them under that heading. Anything shown but left loose sits above the first
             heading. Drag one back to <strong>Not shown</strong> to take it off the page.
           </p>
+
+          {/* When nothing is eligible for the spec, say why and what to do - a
+              product whose only attributes vary per variant (a chair that is all
+              colour/size options, say) has no single value to list, so the buckets
+              below would otherwise be an unexplained row of empties. */}
+          {specHelpings.length === 0 && notShownHelpings.length === 0 && (
+            <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+              {helpings.length > 0
+                ? 'The attributes on this product are all set to vary per variant, which have no single value to show here. Add an ordinary attribute above - leave “Use for variations” unticked - such as “Gas height adjustment” with the value “Yes”, and it turns up below to drag onto the page.'
+                : 'Add an attribute to this product above, then it turns up here to drag onto the page.'}
+            </p>
+          )}
 
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
@@ -726,7 +738,7 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
               draggedKey={draggedKey}
               setDraggedKey={setDraggedKey}
               onPlace={placeHelping}
-              emptyHint="Every attribute is on the page. Drag one here to take it off."
+              emptyHint="Ordinary attributes you're not showing sit here. Drag one onto the page above, or drag a shown one back here."
             />
           </div>
         </section>
