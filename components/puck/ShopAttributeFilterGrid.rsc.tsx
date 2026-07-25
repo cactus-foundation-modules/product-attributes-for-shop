@@ -6,6 +6,7 @@ import { listTags, resolveCategoryProductFilter } from '@/modules/shop/lib/db/ca
 import { getShopConfigCached } from '@/modules/shop/lib/config'
 import { getShopBreakpoints } from '@/modules/shop/lib/breakpoints'
 import { resolveCardTemplate, buildCardContext } from '@/modules/shop/lib/card-template'
+import { resolveCardFromPrices } from '@/modules/shop/lib/card-price'
 import { injectShopProductCardEmbed } from '@/modules/shop/lib/inject-part-context'
 import { formatMoney } from '@/modules/shop/lib/money'
 import { shopCardCss } from '@/modules/shop/components/puck/parts/card-parts'
@@ -96,16 +97,17 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
   }
 
   const productIds = products.map((p) => p.id)
-  const [matrix, counts] = await Promise.all([
+  const [matrix, counts, fromPrices] = await Promise.all([
     getEffectiveValueIdsByProduct(productIds, { includeVariantValues: settings.includeVariantValues }),
     countProductsByValue(productIds, { includeVariantValues: settings.includeVariantValues }),
+    resolveCardFromPrices(productIds),
   ])
 
   const tagById = new Map(tags.map((t) => [t.id, t.slug]))
   const items: CardItem[] = await Promise.all(
     products.map(async (product) => {
       const [media, tagIds] = await Promise.all([getProductMedia(product.id), getProductTagIds(product.id)])
-      return { product, ctx: buildCardContext(product, media, tagById, tagIds, config.currencySymbol, config) }
+      return { product, ctx: buildCardContext(product, media, tagById, tagIds, config.currencySymbol, config, fromPrices.get(product.id) ?? null) }
     }),
   )
 
