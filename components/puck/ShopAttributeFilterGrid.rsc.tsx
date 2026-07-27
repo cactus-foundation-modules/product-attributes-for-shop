@@ -58,7 +58,7 @@ async function renderTaggedCards(template: PuckData | null, items: CardItem[], m
           <h3 className="shop-card-name">{product.name}</h3>
           <div className="shop-card-pricerow">
             {ctx.fromPrice != null ? (
-              <span className="shop-card-price">From {formatMoney(ctx.fromPrice, ctx.currencySymbol)}</span>
+              <span className="shop-card-price">{ctx.fromPriceVaries ? 'From ' : ''}{formatMoney(ctx.fromPrice, ctx.currencySymbol)}</span>
             ) : (
               <>
                 <span className="shop-card-price">{formatMoney(ctx.prices.now, ctx.currencySymbol)}</span>
