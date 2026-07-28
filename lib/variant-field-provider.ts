@@ -4,8 +4,6 @@ import {
   setVariantAttributeValue,
   ensureAttributeValueByLabel,
   findAttributeValueByLabel,
-  listAllAttributes,
-  upsertProductAttribute,
 } from '@/modules/product-attributes-for-shop/lib/db/membership'
 import { ProductAttributesVariantCell } from '@/modules/product-attributes-for-shop/components/admin/ProductAttributesVariantCell'
 import type { PatVariationColumn } from '@/modules/product-attributes-for-shop/lib/types'
@@ -33,35 +31,19 @@ async function columnsFor(productId: string): Promise<PatVariationColumn[]> {
   return cols
 }
 
-// The whole attribute vocabulary keyed by lower-cased name, cached like the
-// columns above. Lets an import match a sheet column heading to the attribute it
-// names even when the product does not use that attribute yet, so a value typed
-// there can auto-attach the attribute to the product.
-const attrNameCache = { map: null as Map<string, { id: string; name: string }> | null, at: 0 }
-async function attributesByName(): Promise<Map<string, { id: string; name: string }>> {
-  if (attrNameCache.map && Date.now() - attrNameCache.at < CACHE_TTL_MS) return attrNameCache.map
-  const all = await listAllAttributes()
-  const map = new Map(all.map((a) => [a.name.trim().toLowerCase(), { id: a.id, name: a.name }]))
-  attrNameCache.map = map
-  attrNameCache.at = Date.now()
-  return map
-}
-
-// Headings on the Variations tab that belong to shop-variations or another module,
-// never to an attribute. An auto-assign match against one of these is refused, so
-// an attribute the owner happens to have named "Supplier" can never hijack the
-// real Supplier column. Option/Value pairs are matched by pattern, not listed.
-const RESERVED_VARIATION_HEADERS: ReadonlySet<string> = new Set([
-  'parent slug', 'parent name', 'variant sku', 'price', 'sale price', 'rrp', 'trade price', 'cost price',
-  'stock', 'barcode', 'supplier', 'weight', 'image', 'variant id',
-])
-const OPTION_PAIR_HEADER = /^(option|value) \d+$/
-
-// Is this heading eligible to auto-attach an attribute? It must not already be one
-// of the product's columns, nor a reserved/option heading.
-function isAutoAssignHeader(key: string, assignedNames: ReadonlySet<string>): boolean {
-  return !assignedNames.has(key) && !RESERVED_VARIATION_HEADERS.has(key) && !OPTION_PAIR_HEADER.test(key)
-}
+// A sheet only ever fills columns the product ALREADY has. It never attaches an
+// attribute to a product off a name match, and never flips one the owner set up as
+// ordinary product information into a per-variation column.
+//
+// It used to. Any heading naming an existing attribute - "Range", "Catalog",
+// "Commodity Code" - attached that attribute to the product as a variation column
+// on the first non-empty cell, and `upsertProductAttribute` then flipped an
+// existing product-level helping to use-for-variations along the way. The new
+// column went straight back out into the sheet header on the next export, so the
+// following Pull re-asserted it: deleting it in the admin never stuck, and a live
+// catalogue ended up with spec fields standing as per-variant columns on twenty-odd
+// products. Attaching an attribute to a product is the owner's call, made on the
+// product's Attributes tab, not a side effect of a column heading.
 
 // The context beginImport hands to each applyImportedRow of one parent's import:
 // every child's current variation-attribute value, preloaded once, plus a cache
@@ -72,14 +54,10 @@ function isAutoAssignHeader(key: string, assignedNames: ReadonlySet<string>): bo
 type AttrImportCtx = {
   current: Map<string, Map<string, string | null>>
   labelCache: Map<string, string | null>
-  // Attributes auto-attached to this parent during the import, attribute id ->
-  // the assignment id it got. Keeps the upsert to once per attribute rather than
-  // once per row that carries its column.
-  assigned: Map<string, string>
 }
 
 function isAttrImportCtx(ctx: unknown): ctx is AttrImportCtx {
-  return !!ctx && typeof ctx === 'object' && 'current' in ctx && 'labelCache' in ctx && 'assigned' in ctx
+  return !!ctx && typeof ctx === 'object' && 'current' in ctx && 'labelCache' in ctx
 }
 
 // The current value id for a (child, helping), from the preloaded context. A
@@ -119,7 +97,7 @@ export const productAttributesVariantFieldProvider = {
       for (const [assignmentId, v] of Object.entries(byAssignment)) assignmentMap.set(assignmentId, v.valueId)
       current.set(childId, assignmentMap)
     }
-    return { current, labelCache: new Map(), assigned: new Map() }
+    return { current, labelCache: new Map() }
   },
 
   async applyImportedRow(productId: string, childProductId: string, row: Record<string, string>, ctx?: unknown) {
@@ -162,49 +140,8 @@ export const productAttributesVariantFieldProvider = {
         importCtx.current.set(childProductId, byAssignment)
       }
     }
-
-    // Auto-assign. A value typed into a column that names an attribute this
-    // product does not yet use for variations attaches that attribute to the
-    // product (as a variation column) and sets the value - so an existing
-    // attribute can be put onto any product straight from the sheet. Only headings
-    // that match an EXISTING attribute act; an unknown heading is the owner's own
-    // column and is left alone, and a blank cell never creates an assignment.
-    const assignedNames = new Set(cols.map((c) => c.name.trim().toLowerCase()))
-    const attrByName = await attributesByName()
-    for (const [rawKey, rawVal] of Object.entries(row)) {
-      const key = rawKey.trim().toLowerCase()
-      if (!isAutoAssignHeader(key, assignedNames)) continue
-      const cellValue = (rawVal ?? '').trim()
-      if (!cellValue) continue
-      const attr = attrByName.get(key)
-      if (!attr) continue
-      // Get-or-make the variation assignment, once per attribute in this import.
-      // upsertProductAttribute matches the product's un-named helping for the
-      // attribute (creating it use-for-variations when there is none), so a second
-      // row carrying the same column reuses it rather than making a duplicate.
-      let assignmentId = importCtx?.assigned.get(attr.id)
-      if (!assignmentId) {
-        const made = await upsertProductAttribute(productId, { attributeId: attr.id, useForVariations: true, showInFilters: false })
-        if (!made) continue
-        assignmentId = made
-        importCtx?.assigned.set(attr.id, assignmentId)
-      }
-      const cacheKey = `${attr.id}|${cellValue.toLowerCase()}`
-      let valueId: string | null
-      if (importCtx?.labelCache.has(cacheKey)) {
-        valueId = importCtx.labelCache.get(cacheKey) ?? null
-      } else {
-        valueId = await ensureAttributeValueByLabel(attr.id, cellValue)
-        importCtx?.labelCache.set(cacheKey, valueId)
-      }
-      if (valueId === currentValueId(importCtx, childProductId, assignmentId)) continue
-      await setVariantAttributeValue(childProductId, assignmentId, valueId)
-      if (importCtx) {
-        const byAssignment = importCtx.current.get(childProductId) ?? new Map<string, string | null>()
-        byAssignment.set(assignmentId, valueId)
-        importCtx.current.set(childProductId, byAssignment)
-      }
-    }
+    // A heading the product has no column for is somebody else's - another
+    // module's field, or one of the owner's own - and is left exactly as it is.
   },
 
   // Read-only twin of applyImportedRow, for the import preview's change count.
@@ -258,19 +195,8 @@ export const productAttributesVariantFieldProvider = {
       // names never imported - the very thing a rowChanged twin exists to prevent.
       if (valueId === null || valueId !== stored) return true
     }
-
-    // Auto-assign detection, read-only twin of the block in applyImportedRow. A
-    // non-empty value in a column that names an existing attribute this product
-    // does not use yet would attach the attribute and set the value on apply -
-    // nothing is stored against it, so it is always a change. Creates nothing.
-    const assignedNames = new Set(cols.map((c) => c.name.trim().toLowerCase()))
-    const attrByName = await attributesByName()
-    for (const [rawKey, rawVal] of Object.entries(row)) {
-      const key = rawKey.trim().toLowerCase()
-      if (!isAutoAssignHeader(key, assignedNames)) continue
-      if ((rawVal ?? '').trim() === '') continue
-      if (attrByName.has(key)) return true
-    }
+    // No auto-assign twin to mirror any more: a heading the product has no column
+    // for changes nothing, so it cannot make a row count as changed.
     return false
   },
 

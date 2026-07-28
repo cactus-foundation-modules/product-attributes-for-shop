@@ -24,14 +24,16 @@ const ensureAttributeValueByLabel = vi.fn(async (_a: string, label: string): Pro
 const findAttributeValueByLabel = vi.fn(async (_a: string, label: string): Promise<string | null> =>
   label.toLowerCase().startsWith('new') ? null : `v-${label.toLowerCase()}`,
 )
-// The whole vocabulary for auto-assign matching. "Supplier" is here on purpose:
-// it collides with a reserved column heading, so it proves the guard refuses it.
+// The rest of the module's db layer, stubbed to blow up if the provider ever
+// reaches for it again. "Catalog" and "Supplier" would both be real attributes on
+// a live site, and a sheet heading naming one of them must no longer attach it to
+// the product - so the provider has no business listing the vocabulary or writing
+// an assignment during an import.
 const listAllAttributes = vi.fn(async (): Promise<{ id: string; name: string }[]> => [
   { id: 'attr1', name: 'Finish' },
   { id: 'attr-catalog', name: 'Catalog' },
   { id: 'attr-supplier', name: 'Supplier' },
 ])
-// Returns the assignment id an auto-attached attribute lands on.
 const upsertProductAttribute = vi.fn(
   async (_p: string, row: { attributeId: string; useForVariations: boolean; showInFilters: boolean }): Promise<string | null> => `asg-${row.attributeId}`,
 )
@@ -265,64 +267,59 @@ describe('an attribute used for variations more than once', () => {
   })
 })
 
-// Typing a value into a column that names an existing attribute the product does
-// not use for variations yet attaches the attribute to the product and sets the
-// value - so an attribute can be put onto any product straight from the sheet.
-describe('auto-assigning an attribute the product does not use yet', () => {
-  it('attaches the attribute and sets the value on apply', async () => {
+// An import fills the columns a product already has and nothing else. A heading
+// that names an attribute the product does not use for variations is somebody
+// else's column - it must not attach that attribute, and must not turn one the
+// owner set up as ordinary product information into a per-variation one. The
+// admin's Attributes tab is the only place that decision gets made.
+describe('a heading the product has no column for', () => {
+  it('attaches nothing and writes nothing, even when it names a real attribute', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
     await provider.applyImportedRow(parent, 'c1', { 'Catalog': 'Seating' }, ctx)
-    expect(upsertProductAttribute).toHaveBeenCalledWith(parent, { attributeId: 'attr-catalog', useForVariations: true, showInFilters: false })
-    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg-attr-catalog', 'v-seating')
+    expect(upsertProductAttribute).not.toHaveBeenCalled()
+    expect(setVariantAttributeValue).not.toHaveBeenCalled()
+    // It does not even need to know what the vocabulary holds any more.
+    expect(listAllAttributes).not.toHaveBeenCalled()
   })
 
-  it('rowChanged flags it as a change without creating anything', async () => {
+  it('rowChanged does not count it as a change', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    expect(await provider.rowChanged!(parent, 'c1', { 'Catalog': 'Seating' }, ctx)).toBe(true)
+    expect(await provider.rowChanged!(parent, 'c1', { 'Catalog': 'Seating' }, ctx)).toBe(false)
     expect(upsertProductAttribute).not.toHaveBeenCalled()
     expect(setVariantAttributeValue).not.toHaveBeenCalled()
   })
 
-  it('attaches the attribute once across many rows', async () => {
-    getVariantAttributeValues.mockResolvedValueOnce({})
-    const parent = nextParent()
-    const ctx = await provider.beginImport!(parent, ['c1', 'c2'])
-    await provider.applyImportedRow(parent, 'c1', { 'Catalog': 'Seating' }, ctx)
-    await provider.applyImportedRow(parent, 'c2', { 'Catalog': 'Seating' }, ctx)
-    expect(upsertProductAttribute).toHaveBeenCalledTimes(1)
-    expect(setVariantAttributeValue).toHaveBeenCalledTimes(2)
-  })
-
-  it('a blank cell in a known-attribute column attaches nothing', async () => {
+  it('leaves shop-variations\' own columns alone', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { 'Catalog': '' }, ctx)
-    expect(upsertProductAttribute).not.toHaveBeenCalled()
-    expect(setVariantAttributeValue).not.toHaveBeenCalled()
-  })
-
-  it('a heading that collides with a reserved column is never auto-assigned', async () => {
-    getVariantAttributeValues.mockResolvedValueOnce({})
-    const parent = nextParent()
-    const ctx = await provider.beginImport!(parent, ['c1'])
-    // "Supplier" is a real attribute in the vocabulary here, but it is also
-    // shop-variations' own column, so it must be left to shop-variations.
+    // "Supplier" is a real attribute in the vocabulary here, and also
+    // shop-variations' own column. Either way it is not this product's.
     await provider.applyImportedRow(parent, 'c1', { 'Supplier': 'Acme' }, ctx)
     expect(upsertProductAttribute).not.toHaveBeenCalled()
     expect(setVariantAttributeValue).not.toHaveBeenCalled()
   })
 
-  it('an unknown heading (no matching attribute) attaches nothing', async () => {
+  it('an unknown heading is left alone', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
     await provider.applyImportedRow(parent, 'c1', { 'Made Up Column': 'x' }, ctx)
     expect(upsertProductAttribute).not.toHaveBeenCalled()
     expect(setVariantAttributeValue).not.toHaveBeenCalled()
+  })
+
+  it('still fills the columns the product does have, alongside one it does not', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    await provider.applyImportedRow(parent, 'c1', { 'Main finish': 'Oak', 'Catalog': 'Seating' }, ctx)
+    expect(setVariantAttributeValue).toHaveBeenCalledTimes(1)
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg1', 'v-oak')
+    expect(upsertProductAttribute).not.toHaveBeenCalled()
   })
 })
