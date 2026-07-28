@@ -20,6 +20,10 @@ const TOGGLES: Array<{ key: keyof PatSettings; label: string; hint: string }> = 
   },
 ]
 
+// A sub-tab of shop's settings tab rather than a top-level Settings tab, hosted
+// through the 'shop.settings-sub-tabs' slot (manifest `host`). Shop lends the
+// space and nothing else: own fetch, own save, own permission, own module API.
+// Shop's "Save settings" button stands down while this is showing.
 export function ProductAttributesSettingsTab() {
   const [settings, setSettings] = useState<PatSettings | null>(null)
   const [saving, setSaving] = useState(false)
