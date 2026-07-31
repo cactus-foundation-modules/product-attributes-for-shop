@@ -7,7 +7,6 @@ import {
   deleteAttributeValue,
   getAttributeValue,
   getAttributeValueOwner,
-  attributeValueLabelTaken,
   ensureUniqueValueSlug,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 import { fileSwatchImage } from '@/modules/product-attributes-for-shop/lib/media-folder'
@@ -16,6 +15,10 @@ import { isImageSwatch, isValidSwatch, SWATCH_MAX_LENGTH, SWATCH_SIZE_MAX_LENGTH
 
 const PatchBody = z.object({
   label: z.string().min(1).max(80).optional(),
+  // A new slug for the value, e.g. "black-mfc". Renaming a LABEL no longer
+  // touches the slug - it is the value's stable identity, and every sheet cell
+  // and variation copy resolves by it - so moving it is its own deliberate edit.
+  slug: z.string().min(1).max(100).optional(),
   // A hex colour or a picture url - see isValidSwatch. Anything else is refused
   // rather than stored and rendered, since this string ends up in an <img src>.
   swatch: z.string().max(SWATCH_MAX_LENGTH).refine(isValidSwatch).nullable().optional(),
@@ -35,16 +38,22 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const parsed = PatchBody.safeParse(await request.json())
   if (!parsed.success) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
 
+  // A label rename is just a rename now: duplicates are legal (two "Black"s,
+  // told apart by slug), and the slug deliberately stays put so sheets and
+  // variation copies keep resolving the same value. Changing the slug is its
+  // own explicit edit below.
   const label = parsed.data.label?.trim()
+  if (label !== undefined && !label) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
+
   let slug: string | undefined
-  if (label !== undefined) {
-    if (!label) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
+  if (parsed.data.slug !== undefined) {
+    const requested = slugify(parsed.data.slug)
+    if (!requested) {
+      return NextResponse.json({ error: 'That slug has nothing usable in it - letters and numbers, please.' }, { status: 400 })
+    }
     const owner = await getAttributeValueOwner(id)
     if (!owner) return NextResponse.json({ error: 'Value not found' }, { status: 404 })
-    if (await attributeValueLabelTaken(owner.attributeId, label, id)) {
-      return NextResponse.json({ error: `That attribute already has a value called "${label}".` }, { status: 409 })
-    }
-    slug = await ensureUniqueValueSlug(owner.attributeId, slugify(label) || 'value', id)
+    slug = await ensureUniqueValueSlug(owner.attributeId, requested, id)
   }
 
   // A blank box means "no size", not a size of "". Normalised here so the column
@@ -55,7 +64,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   await updateAttributeValue(id, {
     ...parsed.data,
     ...(swatchSize !== undefined ? { swatchSize } : {}),
-    ...(label !== undefined ? { label, slug } : {}),
+    ...(label !== undefined ? { label } : {}),
+    // The normalised, deduped spelling - never the raw request string.
+    ...(slug !== undefined ? { slug } : {}),
   })
 
   // File a newly-picked picture in the attribute's folder. Filing can rewrite the
@@ -82,10 +93,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const propagated = await syncSourcedOptionValues(id, {
     ...(label !== undefined ? { label } : {}),
     ...(parsed.data.swatch !== undefined ? { swatch } : {}),
+    ...(slug !== undefined ? { slug } : {}),
   })
 
   return NextResponse.json({
     ok: true,
+    ...(slug !== undefined ? { slug } : {}),
     ...(filed ? { swatch } : {}),
     ...(propagated.updated > 0 || propagated.blocked.length > 0
       ? {

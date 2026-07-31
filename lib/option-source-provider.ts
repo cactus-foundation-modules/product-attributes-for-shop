@@ -2,6 +2,7 @@ import {
   listAttributes,
   createAttributeValue,
   findAttributeValueByLabel,
+  findAttributeValueBySlug,
   getAttribute,
   getAttributeValue,
   ensureUniqueValueSlug,
@@ -28,22 +29,25 @@ import { isImageSwatch, isValidSwatch } from '@/modules/product-attributes-for-s
 // ability to come back later and re-read the attribute - which value is which
 // survives a rename, because the match is on id rather than label.
 
-type OptionSourceValue = { ref: string; label: string; swatch: string | null }
+type OptionSourceValue = { ref: string; label: string; slug: string | null; swatch: string | null }
 type OptionSource = { ref: string; name: string; groupLabel?: string | null; values: OptionSourceValue[] }
 
 // A value with no label is not offerable - it would create a nameless option
 // value and, downstream, a nameless variant.
 function toSource(
-  attribute: { id: string; name: string; groupId: string | null; values: { id: string; label: string; swatch: string | null }[] },
+  attribute: { id: string; name: string; groupId: string | null; values: { id: string; label: string; slug: string; swatch: string | null }[] },
   groupNames: Map<string, string>,
 ): OptionSource {
   return {
     ref: attribute.id,
     name: attribute.name,
     groupLabel: attribute.groupId ? groupNames.get(attribute.groupId) ?? null : null,
+    // The slug rides along so copies keep it: it is the value's identity in the
+    // spreadsheet round-trip ("(black-mfc)Black"), and two values sharing the
+    // label "Black" stay tellable apart on every product they land on.
     values: attribute.values
       .filter((v) => v.label.trim().length > 0)
-      .map((v) => ({ ref: v.id, label: v.label, swatch: v.swatch })),
+      .map((v) => ({ ref: v.id, label: v.label, slug: v.slug, swatch: v.swatch })),
   }
 }
 
@@ -91,27 +95,34 @@ export const productAttributesOptionSourceProvider = {
   // the list every other product picks from, and had to be typed a second time
   // on the attributes screen to become reusable.
   //
-  // Same reuse-by-label rule the values POST route applies with `reuseExisting`:
-  // an attribute already carrying "Oak" hands that value's ref back rather than
-  // making a second "Oak", so two products end up pointing at one value.
+  // Same reuse rule the values POST route applies with `reuseExisting`: an
+  // attribute already carrying the value hands its ref back rather than making a
+  // second copy, so two products end up pointing at one value. A caller that
+  // knows the slug (a "(black-mfc)Black" sheet cell) is matched on the slug -
+  // that is the value's identity, and with two "Black"s on one attribute it is
+  // the only spelling that says which one. A bare label matches by label, first
+  // in position order winning, exactly as before.
   //
   // Null when the attribute has gone (deleted between the page loading and the
   // value being typed), which the caller reports rather than papering over.
-  async createValue(ref: string, input: { label: string; swatch: string | null }): Promise<OptionSourceValue | null> {
+  async createValue(ref: string, input: { label: string; swatch: string | null; slug?: string | null }): Promise<OptionSourceValue | null> {
     const attribute = await getAttribute(ref)
     if (!attribute) return null
 
     const label = input.label.trim()
     if (!label) return null
 
-    const existing = await findAttributeValueByLabel(ref, label)
-    if (existing) return { ref: existing.id, label: existing.label, swatch: existing.swatch }
+    const wantedSlug = input.slug?.trim() || null
+    const existing = wantedSlug
+      ? await findAttributeValueBySlug(ref, wantedSlug)
+      : await findAttributeValueByLabel(ref, label)
+    if (existing) return { ref: existing.id, label: existing.label, slug: existing.slug, swatch: existing.swatch }
 
     // A swatch the attributes screen would refuse is dropped rather than stored:
     // this string ends up in an <img src>, and a value with no swatch is a far
     // smaller problem than one with a swatch nobody vetted.
     const swatch = input.swatch && isValidSwatch(input.swatch) ? input.swatch : null
-    const slug = await ensureUniqueValueSlug(ref, slugify(label) || 'value')
+    const slug = await ensureUniqueValueSlug(ref, wantedSlug || slugify(label) || 'value')
     const position = await nextValuePosition(ref)
     const created = await createAttributeValue({ attributeId: ref, label, slug, swatch, swatchSize: null, position })
 
@@ -124,6 +135,6 @@ export const productAttributesOptionSourceProvider = {
       stored = (await getAttributeValue(created.id))?.swatch ?? swatch
     }
 
-    return { ref: created.id, label, swatch: stored }
+    return { ref: created.id, label, slug, swatch: stored }
   },
 }

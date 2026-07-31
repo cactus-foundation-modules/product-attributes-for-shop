@@ -160,6 +160,19 @@ export async function findAttributeValueByLabel(attributeId: string, label: stri
   return rows[0] ? mapValue(rows[0]) : null
 }
 
+// The value holding a slug, if any. Slugs are unique within an attribute, so
+// this is the one lookup that stays unambiguous when two values share a label -
+// which is legal now, and rather the point ("Black" in MFC and "Black" in
+// fabric, told apart as black-mfc / black-fabric).
+export async function findAttributeValueBySlug(attributeId: string, slug: string): Promise<PatAttributeValue | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "pat_attribute_values"
+    WHERE "attribute_id" = ${attributeId} AND "slug" = ${slug}
+    LIMIT 1
+  `
+  return rows[0] ? mapValue(rows[0]) : null
+}
+
 export async function createAttributeValue(fields: {
   attributeId: string
   label: string

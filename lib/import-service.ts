@@ -12,6 +12,7 @@ import {
   createAttribute,
   createAttributeValue,
   ensureUniqueAttributeSlug,
+  ensureUniqueValueSlug,
   nextAttributePosition,
   nextValuePosition,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
@@ -95,18 +96,30 @@ export async function importVariationOptions(productId: string): Promise<ImportR
     touchedAttributeIds.push(attribute.id)
 
     for (const value of option.values) {
-      const slug = importedValueSlug(value.label)
-      let match = attribute.values.find((v) => v.slug === slug || v.label.toLowerCase() === value.label.toLowerCase())
+      // The variation value's own slug is the identity to import under - it is
+      // what tells two "Black"s apart. Falling back to a label match is only
+      // safe when the label is unique in this option; with duplicates it would
+      // collapse both Blacks onto whichever attribute value got there first.
+      const slug = value.slug || importedValueSlug(value.label)
+      const labelDuplicated =
+        option.values.filter((v) => v.label.toLowerCase() === value.label.toLowerCase()).length > 1
+      let match =
+        attribute.values.find((v) => v.slug === slug) ??
+        (labelDuplicated ? undefined : attribute.values.find((v) => v.label.toLowerCase() === value.label.toLowerCase()))
       if (!match) {
         // Hex colours and picture urls both come across now that IMAGE exists.
         // Anything else shop-variations may hold there - a bare media id, say -
         // is still dropped: there is nothing this module could render from it.
         const swatch = value.swatch && isValidSwatch(value.swatch) ? value.swatch : null
         const position = await nextValuePosition(attribute.id)
-        const created = await createAttributeValue({ attributeId: attribute.id, label: value.label, slug, swatch, position })
+        // Deduped against the attribute: the wanted slug can be held by a value
+        // with a different label (which the match above then skipped), and the
+        // unique constraint would fail the whole import over it.
+        const freeSlug = await ensureUniqueValueSlug(attribute.id, slug)
+        const created = await createAttributeValue({ attributeId: attribute.id, label: value.label, slug: freeSlug, swatch, position })
         // No swatch size: shop-variations has no such field to import one from, and
         // an owner sets it on the attributes screen afterwards if the swatch needs it.
-        match = { id: created.id, attributeId: attribute.id, label: value.label, slug, swatch, swatchSize: null, position }
+        match = { id: created.id, attributeId: attribute.id, label: value.label, slug: freeSlug, swatch, swatchSize: null, position }
         attribute.values.push(match)
         valuesCreated++
       }

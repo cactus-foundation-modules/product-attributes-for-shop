@@ -6,8 +6,8 @@ import {
   getAttribute,
   createAttributeValue,
   getAttributeValue,
-  attributeValueLabelTaken,
   findAttributeValueByLabel,
+  findAttributeValueBySlug,
   ensureUniqueValueSlug,
   nextValuePosition,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
@@ -16,6 +16,11 @@ import { isImageSwatch, isValidSwatch, SWATCH_MAX_LENGTH, SWATCH_SIZE_MAX_LENGTH
 
 const PostBody = z.object({
   label: z.string().min(1).max(80),
+  // Explicit slug, e.g. "black-mfc" for a second "Black". Optional: left off,
+  // the slug is made from the label ("black", then "black-2" for a duplicate).
+  // Normalised through slugify either way, so whatever arrives ends up in the
+  // platform's lowercase-and-hyphens shape.
+  slug: z.string().min(1).max(100).optional(),
   // A hex colour or a picture url - see isValidSwatch. Anything else is refused
   // rather than stored and rendered, since this string ends up in an <img src>.
   swatch: z.string().max(SWATCH_MAX_LENGTH).refine(isValidSwatch).nullable().optional(),
@@ -24,8 +29,9 @@ const PostBody = z.object({
   // optional there too - a swatch with no size given simply draws uncalibrated.
   swatchSize: z.string().max(SWATCH_SIZE_MAX_LENGTH).nullable().optional(),
   // Set by the inline boxes on a product's Attributes and Variations tabs, where
-  // a label that already exists means "use that one", not "you have made a
-  // mistake". The attributes screen leaves it off and still gets the 409.
+  // a label that already exists means "use that one". The attributes screen
+  // leaves it off: there, typing "Black" a second time makes a second Black with
+  // its own slug - duplicates are legal, told apart by slug.
   reuseExisting: z.boolean().optional(),
 })
 
@@ -42,14 +48,24 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const label = parsed.data.label.trim()
   if (!label) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
 
-  if (parsed.data.reuseExisting) {
-    const existing = await findAttributeValueByLabel(id, label)
-    if (existing) return NextResponse.json({ value: existing, reused: true })
-  } else if (await attributeValueLabelTaken(id, label, '')) {
-    return NextResponse.json({ error: `"${attribute.name}" already has a value called "${label}".` }, { status: 409 })
+  // Duplicate labels are deliberately allowed: a second "Black" with its own
+  // slug and swatch (black-mfc beside black-fabric) is the point, not a mistake.
+  // The slug is what keeps the two apart everywhere that matters.
+  const requestedSlug = parsed.data.slug !== undefined ? slugify(parsed.data.slug) : ''
+  if (parsed.data.slug !== undefined && !requestedSlug) {
+    return NextResponse.json({ error: 'That slug has nothing usable in it - letters and numbers, please.' }, { status: 400 })
   }
 
-  const slug = await ensureUniqueValueSlug(id, slugify(label) || 'value')
+  if (parsed.data.reuseExisting) {
+    // A caller that knows the slug means that exact value; a bare label reuses
+    // the first match as it always did.
+    const existing = requestedSlug
+      ? await findAttributeValueBySlug(id, requestedSlug)
+      : await findAttributeValueByLabel(id, label)
+    if (existing) return NextResponse.json({ value: existing, reused: true })
+  }
+
+  const slug = await ensureUniqueValueSlug(id, requestedSlug || slugify(label) || 'value')
   const swatch = parsed.data.swatch ?? null
   // A blank box is "no size", not a size of "" - see the PATCH route, which
   // normalises the same way so an edit and an add cannot disagree.

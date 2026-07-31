@@ -18,12 +18,21 @@ const TTL_MS = 30_000
 
 export async function hasVariationsTables(): Promise<boolean> {
   if (cached && Date.now() - cached.at < TTL_MS) return cached.value
+  // The slug column check keeps this module honest against an OLD shop-variations
+  // (installed but not yet migrated to per-value slugs): the queries here read
+  // ov."slug", and running them against a slugless table would turn every value
+  // edit into an error. Until the companion catches up, behave as if it were
+  // absent - degraded, self-healing, never broken.
   const rows = await prisma.$queryRaw<[{ present: boolean }]>`
     SELECT (
       to_regclass('public.svr_variants') IS NOT NULL
       AND to_regclass('public.svr_options') IS NOT NULL
       AND to_regclass('public.svr_option_values') IS NOT NULL
       AND to_regclass('public.svr_variant_values') IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE "table_schema" = 'public' AND "table_name" = 'svr_option_values' AND "column_name" = 'slug'
+      )
     ) AS "present"
   `
   const value = Boolean(rows[0]?.present)
@@ -66,7 +75,7 @@ export async function listVariantsForProduct(productId: string): Promise<PatVari
 
 export type VariationOption = {
   name: string
-  values: { id: string; label: string; swatch: string | null; position: number }[]
+  values: { id: string; label: string; slug: string; swatch: string | null; position: number }[]
 }
 
 // The product's variation options (Size, Colour) with their values - the raw
@@ -74,13 +83,14 @@ export type VariationOption = {
 export async function listVariationOptions(productId: string): Promise<VariationOption[]> {
   if (!(await hasVariationsTables())) return []
   const rows = await prisma.$queryRaw<
-    { option_name: string; option_position: number; value_id: string; label: string; swatch: string | null; value_position: number }[]
+    { option_name: string; option_position: number; value_id: string; label: string; slug: string; swatch: string | null; value_position: number }[]
   >`
     SELECT
       o."name" AS "option_name",
       o."position" AS "option_position",
       ov."id" AS "value_id",
       ov."label",
+      ov."slug",
       ov."swatch",
       ov."position" AS "value_position"
     FROM "svr_options" o
@@ -91,7 +101,7 @@ export async function listVariationOptions(productId: string): Promise<Variation
   const byName = new Map<string, VariationOption>()
   for (const row of rows) {
     const existing = byName.get(row.option_name) ?? { name: row.option_name, values: [] }
-    existing.values.push({ id: row.value_id, label: row.label, swatch: row.swatch, position: row.value_position })
+    existing.values.push({ id: row.value_id, label: row.label, slug: row.slug, swatch: row.swatch, position: row.value_position })
     byName.set(row.option_name, existing)
   }
   return [...byName.values()]
@@ -204,8 +214,9 @@ export type SourcedValueSyncResult = {
   /** Option values brought into line with this attribute value. */
   updated: number
   /**
-   * Products where a copy could not follow the new label, because another value
-   * on the same option is already called that.
+   * Products where a copy could not follow a SLUG change, because another value
+   * on the same option already holds that slug. Labels are never blocked any
+   * more - duplicates are legal, told apart by slug.
    */
   blocked: string[]
   /** Variant child products whose names were re-composed off the new label. */
@@ -227,10 +238,10 @@ export type SourcedValueSyncResult = {
  */
 export async function syncSourcedOptionValues(
   valueId: string,
-  fields: { label?: string; swatch?: string | null },
+  fields: { label?: string; swatch?: string | null; slug?: string },
 ): Promise<SourcedValueSyncResult> {
-  const { label, swatch } = fields
-  if (label === undefined && swatch === undefined) return { updated: 0, blocked: [], variantsRenamed: 0 }
+  const { label, swatch, slug } = fields
+  if (label === undefined && swatch === undefined && slug === undefined) return { updated: 0, blocked: [], variantsRenamed: 0 }
   if (!(await hasVariationsTables())) return { updated: 0, blocked: [], variantsRenamed: 0 }
 
   // The copies, and the products they sit on. Read up front so the swatch and
@@ -268,10 +279,28 @@ export async function syncSourcedOptionValues(
   }
 
   if (label !== undefined) {
-    // Two values on one option sharing a label make the generated variant names
-    // ambiguous ("Chair - Oak / Oak"), which is why shop-variations refuses the
-    // rename at its own end. Same answer here: leave that copy as it was and say
-    // where, rather than fail the attribute edit for every other product.
+    // Duplicate labels are legal now - two "Black"s on one option are told apart
+    // by slug and swatch - so every copy simply follows the rename. No clash
+    // check, no copy left behind.
+    const renamed = await prisma.$executeRaw`
+      UPDATE "svr_option_values" ov
+      SET "label" = ${label}
+      FROM "svr_options" o
+      WHERE o."id" = ov."option_id"
+        AND ov."source_ref" = ${valueId}
+        AND o."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
+        AND ov."label" <> ${label}
+    `
+    updated += renamed
+    if (renamed > 0) for (const copy of copies) touched.add(copy.product_id)
+  }
+
+  if (slug !== undefined) {
+    // The copies' slug follows the attribute's, so the sheet spelling
+    // "(black-mfc)Black" reads the same on every product. Slugs ARE unique per
+    // option, so a copy whose option already holds the new slug (a hand-typed
+    // value, usually) is left as it was and the product named - and DISTINCT ON
+    // keeps two copies of one source value on one option from both claiming it.
     const clashes = await prisma.$queryRaw<{ product_name: string }[]>`
       SELECT DISTINCT p."name" AS "product_name"
       FROM "svr_option_values" ov
@@ -279,41 +308,36 @@ export async function syncSourcedOptionValues(
       JOIN "shp_products" p ON p."id" = o."product_id"
       WHERE ov."source_ref" = ${valueId}
         AND o."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
-        AND lower(ov."label") <> lower(${label})
+        AND ov."slug" <> ${slug}
         AND EXISTS (
           SELECT 1 FROM "svr_option_values" sib
           WHERE sib."option_id" = ov."option_id"
             AND sib."id" <> ov."id"
-            AND lower(sib."label") = lower(${label})
+            AND sib."slug" = ${slug}
         )
     `
     for (const row of clashes) blocked.add(row.product_name)
 
-    // DISTINCT ON for the same reason the option rename has it: nothing at the
-    // database level stops one option holding two copies of the same source
-    // value, and renaming both in one snapshot would create the very duplicate
-    // the clash check exists to prevent.
-    const renamed = await prisma.$executeRaw`
+    const moved = await prisma.$executeRaw`
       UPDATE "svr_option_values" ov
-      SET "label" = ${label}
+      SET "slug" = ${slug}
       WHERE ov."id" IN (
         SELECT DISTINCT ON (cand."option_id") cand."id"
         FROM "svr_option_values" cand
         JOIN "svr_options" o ON o."id" = cand."option_id"
         WHERE cand."source_ref" = ${valueId}
           AND o."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
-          AND cand."label" <> ${label}
+          AND cand."slug" <> ${slug}
         ORDER BY cand."option_id", cand."position", cand."id"
       )
       AND NOT EXISTS (
         SELECT 1 FROM "svr_option_values" sib
         WHERE sib."option_id" = ov."option_id"
           AND sib."id" <> ov."id"
-          AND lower(sib."label") = lower(${label})
+          AND sib."slug" = ${slug}
       )
     `
-    updated += renamed
-    if (renamed > 0) for (const copy of copies) touched.add(copy.product_id)
+    updated += moved
   }
 
   const variantsRenamed = label !== undefined && touched.size > 0

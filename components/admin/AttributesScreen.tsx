@@ -416,10 +416,18 @@ function AttributeCard({
   const isImage = attribute.controlType === 'IMAGE'
 
   async function addValue() {
-    const label = newValue.trim()
+    const raw = newValue.trim()
+    if (!raw) return
+    // "(black-mfc)Black" names the slug up front - the same spelling the
+    // spreadsheet uses - so a second "Black" can be made with the slug you
+    // actually want rather than the automatic "black-2".
+    const m = /^\(([a-z0-9][a-z0-9-]{0,99})\)(.+)$/.exec(raw)
+    const label = m ? m[2]!.trim() : raw
+    const slug = m ? m[1]! : undefined
     if (!label) return
     const ok = await send(`${base}/attributes/${attribute.id}/values`, 'POST', {
       label,
+      ...(slug ? { slug } : {}),
       swatch: isSwatch ? newSwatch : isImage ? newImage : null,
       // Only a picture swatch has a real-world size worth recording; a colour dot
       // and a plain word have nothing to measure.
@@ -503,7 +511,7 @@ function AttributeCard({
       )
     }
     if (blocked.length > 0) {
-      parts.push(`Left alone on ${blocked.join(', ')} - there is already a value called "${label}" there.`)
+      parts.push(`Slug left alone on ${blocked.join(', ')} - a value there already uses it.`)
     }
     setRenameNote(parts.length > 0 ? parts.join(' ') : null)
   }
@@ -684,6 +692,36 @@ function AttributeCard({
             >
               {value.label}
             </button>
+            {/* The slug, editable in place. It is the value's stable identity -
+                what the spreadsheet writes as "(slug)Label" and what tells two
+                "Black"s apart - so it never moves on a label rename and only
+                changes when deliberately edited here. */}
+            <button
+              type="button"
+              aria-label={`Slug for ${value.label}`}
+              title={`Spreadsheet spelling: (${value.slug})${value.label}. Click to change the slug.`}
+              disabled={busy}
+              onClick={() => {
+                const next = prompt(
+                  `Slug for "${value.label}" - its stable name in spreadsheets and imports, e.g. black-mfc:`,
+                  value.slug,
+                )?.trim()
+                if (next && next !== value.slug) void onEditValue(value.id, value.label, { slug: next })
+              }}
+              style={{
+                border: 0,
+                background: 'none',
+                padding: 0,
+                font: 'inherit',
+                fontSize: '0.6875rem',
+                color: 'var(--color-text-muted)',
+                cursor: busy ? 'default' : 'pointer',
+                textDecoration: 'underline dotted',
+                textUnderlineOffset: '0.2em',
+              }}
+            >
+              ({value.slug})
+            </button>
             {/* The swatch size, editable in place for the same reason the colour
                 is: the figure usually turns up after the photograph, and deleting
                 the value to re-add it with a size would take every product ticked
@@ -752,7 +790,7 @@ function AttributeCard({
         <input
           className="form-control"
           style={{ flex: '1 1 12rem', minWidth: '8rem' }}
-          placeholder="Add a value, e.g. Oak"
+          placeholder="Add a value, e.g. Oak - or (black-mfc)Black to set its slug"
           value={newValue}
           onChange={(e) => setNewValue(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void addValue() }}
