@@ -13,6 +13,7 @@ Requires the [shop](https://github.com/cactus-foundation-modules/shop) module. W
 - **Values added where they are needed.** A value can be typed straight onto the product's Attributes tab, or from a variant's cell on the Variations tab, without breaking off to the attributes screen. It joins the attribute's shop-wide list (an existing label is reused, not duplicated), so the vocabulary stays shared while the typing happens in context.
 - **Import from variations.** One button turns a product's existing Size/Colour options into filterable attributes and attaches them to the right variants, so nothing is typed twice.
 - **A filtered storefront grid.** A Puck block that renders your existing Product Card layout and filters instantly in the browser, with the selection mirrored into the URL so a filtered view can be shared.
+- **A Specification tab that follows the chosen variation.** Attributes flagged for the product page replace the shop's standard facts, grouped under headings you build per product. Where a fact differs by variation, the page shows the range until a full combination is picked - a span for measurements, a list for a handful of names, a count when there are too many to read - and then swaps to that variation's own figures under a "Your choice" badge, dropping lines that don't apply to it.
 
 ## How filtering behaves
 
@@ -60,6 +61,8 @@ Uninstalling drops all four.
 ## Notes for developers
 
 shop-variations is an optional companion, so every read of the `svr_` tables goes through `lib/variations-bridge.ts` using raw SQL guarded by a `to_regclass` probe. Nothing here imports from `@/modules/shop-variations/...` - that path does not exist on an install without the module, and a static import would break the build there.
+
+The Specification panel learns which variation the shopper picked the same way: no import, just the browser seam shop-variations documents - the `cactus-shop-variant-selection` window event and the `window.__cactusVariantSelection` snapshot, whose names and shape are duplicated in `components/public/SpecificationPanel.tsx`. The panel's payload carries the variation ids once (`variantIds`) and a parallel array per varying row rather than a uuid-keyed object per row: the biggest listings here run to hundreds of variations, and the keyed shape would outweigh the page.
 
 ## Licence
 

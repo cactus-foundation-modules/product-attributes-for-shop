@@ -1,31 +1,57 @@
 import { prisma } from '@/lib/db/prisma'
 import { hasVariationsTables } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
+import { summariseSpecValues, distinctSpecValues } from '@/modules/product-attributes-for-shop/lib/spec-format'
 
 // The product page's Specification content, assembled for the public product
 // page. Read-only and JSON-serialisable, because it crosses the RSC boundary to
 // the panel shop hands it to (lib/detail-spec-provider.ts).
 
-// One line in the table: an attribute's shown name and its ticked value(s),
-// joined - "Tilt" / "Synchro tilt, anti-shock".
-export type PatSpecRow = { label: string; value: string }
+// One line in the table: an attribute's shown name and its value.
+//
+// `value` is what the row says before the shopper has settled on a variation -
+// the ticked value(s) of a plain row, or a summary of the whole listing on a row
+// that differs per variation ("57cm - 79cm", "92 choices - ..."). It is what the
+// server renders, so it is also what a crawler and a no-JavaScript visitor keep.
+//
+// `perVariant` is present only on a row that DOES differ by variation: one entry
+// per id in the view's `variantIds`, in that order, null where the variation
+// carries nothing for the row (a bespoke-only line on a stock chair, say) and
+// the whole row is then dropped for that variation. Parallel arrays rather than
+// a keyed object on purpose - the biggest listing here has over five hundred
+// variations, and repeating a uuid on every row of every section would dwarf the
+// page it is describing.
+export type PatSpecRow = { label: string; value: string; perVariant?: (string | null)[] }
 
 // A run of rows under one heading. `name` is null for the unsectioned run, which
 // is shown before the first real heading.
 export type PatSpecSectionView = { id: string | null; name: string | null; rows: PatSpecRow[] }
 
-export type PatProductSpecView = { sections: PatSpecSectionView[] }
+export type PatProductSpecView = {
+  // The listing product, so the panel can ignore a selection broadcast by some
+  // other product's island on the same page.
+  parentProductId: string
+  // The enabled variations any per-variant row has a value for, listed once and
+  // indexed by every `perVariant` array. Absent when no row varies.
+  variantIds?: string[]
+  sections: PatSpecSectionView[]
+}
 
 /**
  * The product's Specification content, or null when the product has nothing to
  * show there - which is what keeps shop's own facts table in place until an
  * attribute is actually flagged for the page.
  *
- * Every helping marked show_in_spec is read, ordinary and use-for-variations
- * alike. The two differ only in where the value comes from: an ordinary helping
- * shows the value(s) ticked on the product itself, while a per-variant helping
- * has no single value on the parent, so it shows the distinct set its enabled
- * variants carry - "Upholstery: Black, Grey, Blue". Either way a flagged helping
- * that resolves to nothing is dropped, rather than printing a blank row.
+ * Every helping marked show_in_spec is read, and its value can come from either
+ * side: the value(s) ticked on the product itself, and/or a value ticked on each
+ * individual variation. Whether the helping is use-for-variations makes no
+ * difference here - a chair's seat height is not something anyone picks from a
+ * dropdown, but it still changes with the draughtsman kit, so it is stored per
+ * variation against an ordinary helping. A helping that resolves to nothing is
+ * dropped, rather than printing a blank row.
+ *
+ * A row with per-variation values carries both: a summary for the shopper who
+ * has not chosen yet, and the per-variation values themselves so the panel can
+ * swap in the exact one the moment they do.
  */
 export async function getProductSpecView(productId: string): Promise<PatProductSpecView | null> {
   const variationsInstalled = await hasVariationsTables()
@@ -59,15 +85,23 @@ export async function getProductSpecView(productId: string): Promise<PatProductS
         AND ppa."use_for_variations" = false
       ORDER BY av."position" ASC, av."label" ASC
     `,
-    // Per-variant helpings: the distinct values across the product's enabled
-    // variants for that helping's own column. GROUP BY collapses a value shared
-    // by many variants to one label, and disabled variants are left out to match
-    // what the storefront filter counts as buyable. Guarded on the svr_ tables
-    // being present - a variation helping can outlive an uninstall of
-    // shop-variations, and referencing a missing table would error the query.
+    // The values the product's individual variations carry, one row per
+    // (variation, helping, value). Not collapsed to distinct labels the way it
+    // once was: the panel needs to know WHICH variation holds which value, and
+    // the distinct set is derived from these below anyway.
+    //
+    // Every show_in_spec helping is read, not only the use-for-variations ones.
+    // The two flags answer different questions - "is this a dropdown on the
+    // page" and "does this differ between the things in the dropdown" - and a
+    // chair's dimensions are the second without being the first.
+    //
+    // Disabled variants are left out to match what the storefront counts as
+    // buyable. Guarded on the svr_ tables being present - a spec helping with
+    // per-variant values can outlive an uninstall of shop-variations, and
+    // referencing a missing table would error the query.
     variationsInstalled
-      ? prisma.$queryRaw<{ assignment_id: string; label: string }[]>`
-          SELECT ppa."id" AS "assignment_id", av."label"
+      ? prisma.$queryRaw<{ child_product_id: string; assignment_id: string; label: string }[]>`
+          SELECT sv."child_product_id", ppa."id" AS "assignment_id", av."label"
           FROM "pat_product_attributes" ppa
           JOIN "svr_variants" sv
             ON sv."product_id" = ppa."product_id" AND sv."enabled" = true
@@ -76,26 +110,68 @@ export async function getProductSpecView(productId: string): Promise<PatProductS
           JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
           WHERE ppa."product_id" = ${productId}
             AND ppa."show_in_spec" = true
-            AND ppa."use_for_variations" = true
-          GROUP BY ppa."id", av."id", av."label", av."position"
-          ORDER BY av."position" ASC, av."label" ASC
+          ORDER BY sv."position" ASC, sv."created_at" ASC, av."position" ASC, av."label" ASC
         `
-      : Promise.resolve([] as { assignment_id: string; label: string }[]),
+      : Promise.resolve([] as { child_product_id: string; assignment_id: string; label: string }[]),
   ])
 
   if (helpings.length === 0) return null
 
-  const valuesByAssignment = new Map<string, string[]>()
-  for (const v of [...ownValues, ...variantValues]) {
-    const list = valuesByAssignment.get(v.assignment_id) ?? []
+  // The product's own ticks, joined as before: several ticked values on one
+  // helping are one row's worth of answer ("Synchro tilt, anti-shock").
+  const ownByAssignment = new Map<string, string[]>()
+  for (const v of ownValues) {
+    const list = ownByAssignment.get(v.assignment_id) ?? []
     list.push(v.label)
-    valuesByAssignment.set(v.assignment_id, list)
+    ownByAssignment.set(v.assignment_id, list)
   }
 
+  // assignment -> variation -> that variation's answer for the row. Variations
+  // are numbered in the order the query returned them, which is the order the
+  // owner arranged them in, so `variantIds` and every perVariant array agree.
+  const variantOrder = new Map<string, number>()
+  const byAssignment = new Map<string, Map<string, string[]>>()
+  for (const v of variantValues) {
+    if (!variantOrder.has(v.child_product_id)) variantOrder.set(v.child_product_id, variantOrder.size)
+    let forAssignment = byAssignment.get(v.assignment_id)
+    if (!forAssignment) {
+      forAssignment = new Map<string, string[]>()
+      byAssignment.set(v.assignment_id, forAssignment)
+    }
+    const labels = forAssignment.get(v.child_product_id) ?? []
+    labels.push(v.label)
+    forAssignment.set(v.child_product_id, labels)
+  }
+  const variantIds = [...variantOrder.keys()]
+
   const rowFor = (h: { id: string; name: string }): PatSpecRow | null => {
-    const labels = valuesByAssignment.get(h.id)
-    if (!labels || labels.length === 0) return null
-    return { label: h.name, value: labels.join(', ') }
+    const own = ownByAssignment.get(h.id)
+    const ownValue = own && own.length > 0 ? own.join(', ') : null
+    const forAssignment = byAssignment.get(h.id)
+
+    // A plain row: nothing about it changes with the variation chosen.
+    if (!forAssignment || forAssignment.size === 0) {
+      return ownValue ? { label: h.name, value: ownValue } : null
+    }
+
+    // A per-variation row. A variation with no value of its own falls back to
+    // whatever is ticked on the listing itself, and only shows nothing - and so
+    // drops the row - when the listing has nothing either.
+    const perVariant = variantIds.map((id) => {
+      const labels = forAssignment.get(id)
+      return labels && labels.length > 0 ? labels.join(', ') : ownValue
+    })
+    const distinct = distinctSpecValues(perVariant)
+    const only = distinct[0]
+    if (only === undefined) return null
+    // Every variation saying the same thing is a plain row wearing a costume:
+    // the import should have stored it on the listing, but a row that says
+    // "3 Years" whichever chair you pick has no business being highlighted as
+    // your choice.
+    if (distinct.length === 1 && perVariant.every((v) => v !== null)) {
+      return { label: h.name, value: only }
+    }
+    return { label: h.name, value: summariseSpecValues(distinct), perVariant }
   }
 
   // The unsectioned run first, then each section in its own order. A helping
@@ -123,5 +199,10 @@ export async function getProductSpecView(productId: string): Promise<PatProductS
   }
 
   if (out.length === 0) return null
-  return { sections: out }
+  // The id list is only worth carrying when something indexes it. A listing
+  // whose rows all collapsed to one value ships the same payload it always did.
+  const varies = out.some((s) => s.rows.some((r) => r.perVariant))
+  return varies
+    ? { parentProductId: productId, variantIds, sections: out }
+    : { parentProductId: productId, sections: out }
 }

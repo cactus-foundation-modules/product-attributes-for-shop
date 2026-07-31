@@ -199,11 +199,25 @@ export async function getEffectiveValueIdsByProduct(
 
   const includeVariants = opts?.includeVariantValues ?? true
   if (includeVariants && (await hasVariationsTables())) {
+    // Values on an attribute the parent has hidden from the filters are dropped
+    // here rather than in the pass below, which applies the same rule to the
+    // parent's own values. Same answer either way; the difference is how much
+    // comes back. A variant child now carries the parent's SPEC values too
+    // (dimensions, weights, mechanisms - one row per variation per line of the
+    // Specification tab), and on a listing with hundreds of variations that is
+    // tens of thousands of rows fetched only to be thrown away a moment later.
     const variantRows = await prisma.$queryRaw<{ product_id: string; value_id: string }[]>`
-      SELECT v."product_id", pv."value_id"
+      SELECT DISTINCT v."product_id", pv."value_id"
       FROM "svr_variants" v
       JOIN "pat_product_values" pv ON pv."product_id" = v."child_product_id"
+      JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
       WHERE v."product_id" IN (${Prisma.join(productIds)}) AND v."enabled" = true
+        AND NOT EXISTS (
+          SELECT 1 FROM "pat_product_attributes" ppa
+          WHERE ppa."product_id" = v."product_id" AND ppa."attribute_id" = av."attribute_id"
+          GROUP BY ppa."product_id", ppa."attribute_id"
+          HAVING bool_or(ppa."show_in_filters") = false
+        )
     `
     for (const row of variantRows) {
       const list = result.get(row.product_id) ?? []
