@@ -74,13 +74,21 @@ export async function getProductSpecView(productId: string): Promise<PatProductS
       WHERE "product_id" = ${productId}
       ORDER BY "position" ASC, "created_at" ASC
     `,
-    // Ordinary helpings: the value(s) ticked on the product itself.
+    // Ordinary helpings: the value(s) ticked on the LISTING itself.
+    //
+    // Scoped to the listing's own row on purpose. A variation stores its value
+    // against its parent's assignment (that is what the query below reads), so
+    // joining on the assignment alone hands back every variation's tick as
+    // though the listing carried them all: a chair offered in twenty fabrics
+    // read as one listing ticked "Camira" twenty times, and that string then
+    // stood in as the fallback for any variation with nothing of its own.
     prisma.$queryRaw<{ assignment_id: string; label: string }[]>`
       SELECT pv."assignment_id", av."label"
       FROM "pat_product_values" pv
       JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
       JOIN "pat_product_attributes" ppa ON ppa."id" = pv."assignment_id"
       WHERE ppa."product_id" = ${productId}
+        AND pv."product_id" = ppa."product_id"
         AND ppa."show_in_spec" = true
         AND ppa."use_for_variations" = false
       ORDER BY av."position" ASC, av."label" ASC
