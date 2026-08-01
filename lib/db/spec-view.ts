@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db/prisma'
 import { hasVariationsTables } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
 import { summariseSpecValues, distinctSpecValues } from '@/modules/product-attributes-for-shop/lib/spec-format'
+import type { Breakpoints } from '@/modules/shop/lib/breakpoints-shared'
 
 // The product page's Specification content, assembled for the public product
 // page. Read-only and JSON-serialisable, because it crosses the RSC boundary to
@@ -35,6 +36,14 @@ export type PatProductSpecView = {
   variantIds?: string[]
   sections: PatSpecSectionView[]
 }
+
+// What the panel is actually handed: the view plus the site's own responsive
+// breakpoints, added by lib/detail-spec-provider.ts. Media queries cannot read
+// CSS custom properties, so the widths the group grid collapses at have to be
+// baked into the panel's <style> at render time - same approach as the shop's
+// grids and this module's filter panel. Optional because the panel falls back to
+// the platform defaults if it is ever rendered without them.
+export type PatSpecPanelPayload = PatProductSpecView & { breakpoints?: Breakpoints }
 
 /**
  * The product's Specification content, or null when the product has nothing to

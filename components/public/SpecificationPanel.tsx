@@ -24,7 +24,8 @@
 // purpose.
 
 import { useEffect, useState } from 'react'
-import type { PatProductSpecView } from '@/modules/product-attributes-for-shop/lib/db/spec-view'
+import type { PatSpecPanelPayload } from '@/modules/product-attributes-for-shop/lib/db/spec-view'
+import { DEFAULT_BREAKPOINTS, type Breakpoints } from '@/modules/shop/lib/breakpoints-shared'
 
 const VARIANT_SELECTION_EVENT = 'cactus-shop-variant-selection'
 
@@ -45,9 +46,16 @@ function readSnapshot(): VariantSelectionDetail | null {
 // Class names are this module's own; the colours are the site's tokens, so the
 // table sits in shop's Specification panel looking like it belongs there in both
 // light and dark.
-const css = `
-.pat-spec{display:grid;gap:16px}
-.pat-spec-chosen{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--color-text-muted)}
+//
+// The groups sit three abreast on desktop, two on tablet and one on mobile,
+// collapsing at the site's own Styles > Spacing & Breakpoints widths (handed in
+// by lib/detail-spec-provider.ts) rather than at bespoke pixels. `align-items:
+// start` so a short group keeps its own height instead of stretching to match
+// the tallest one in its row, and the "Your choice" note spans the full width
+// above them rather than taking a column of its own.
+const specCss = ({ tabletBp, mobileBp }: Breakpoints) => `
+.pat-spec{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start}
+.pat-spec-chosen{grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--color-text-muted)}
 .pat-spec-pill{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600;
   background:var(--color-primary-subtle);color:var(--color-primary-dark);
   border:1px solid var(--color-primary-border)}
@@ -60,10 +68,12 @@ const css = `
 .pat-spec-table td:first-child{color:var(--color-text-muted);width:40%;padding-right:24px}
 .pat-spec-table td:last-child{color:var(--color-text);font-weight:500}
 .pat-spec-table tr[data-pat-yours] td:first-child{box-shadow:inset 3px 0 0 var(--color-primary)}
+@media (max-width:${tabletBp}){.pat-spec{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:${mobileBp}){.pat-spec{grid-template-columns:minmax(0,1fr)}}
 `
 
 export function SpecificationPanel({ payload }: { payload: unknown }) {
-  const view = payload as PatProductSpecView
+  const view = payload as PatSpecPanelPayload
   const [variantId, setVariantId] = useState<string | null>(null)
 
   // Post-mount only, and deliberately so: the server rendered the range, and
@@ -110,7 +120,7 @@ export function SpecificationPanel({ payload }: { payload: unknown }) {
 
   return (
     <>
-      <style dangerouslySetInnerHTML={{ __html: css }} />
+      <style dangerouslySetInnerHTML={{ __html: specCss(view.breakpoints ?? DEFAULT_BREAKPOINTS) }} />
       <div className="pat-spec">
         {chosen && (
           <div className="pat-spec-chosen">
