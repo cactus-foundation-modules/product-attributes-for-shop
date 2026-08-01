@@ -47,19 +47,31 @@ function readSnapshot(): VariantSelectionDetail | null {
 // table sits in shop's Specification panel looking like it belongs there in both
 // light and dark.
 //
-// The groups sit three abreast on desktop, two on tablet and one on mobile,
-// collapsing at the site's own Styles > Spacing & Breakpoints widths (handed in
-// by lib/detail-spec-provider.ts) rather than at bespoke pixels. `align-items:
-// start` so a short group keeps its own height instead of stretching to match
-// the tallest one in its row, and the "Your choice" note spans the full width
-// above them rather than taking a column of its own.
+// The groups fill CSS multi-columns rather than a grid: a grid's rows all take
+// the height of their tallest group, leaving a well of whitespace under every
+// short one. Columns stack the boxes tightly - each group starts where the one
+// above it ends - and the browser balances the column bottoms itself, which also
+// means the layout re-settles for free when a chosen variation drops rows out of
+// the table client-side. `break-inside:avoid` keeps a group whole rather than
+// letting a column boundary saw it in half.
+//
+// Three columns on desktop, two on tablet and one on mobile, collapsing at the
+// site's own Styles > Spacing & Breakpoints widths (handed in by
+// lib/detail-spec-provider.ts) rather than at bespoke pixels.
+//
+// The "Your choice" pill is a deliberate copy of shop-variations'
+// YourChoicePill (its components/public/VariantParts.tsx) so the spec table and
+// the gallery stage wear the same badge - copied, not imported, because that
+// module may not be installed and '@/modules/shop-variations/...' would break
+// the build on such a site (same bargain as the selection event above). Static
+// here rather than absolute: it leads the table instead of floating over it.
 const specCss = ({ tabletBp, mobileBp }: Breakpoints) => `
-.pat-spec{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start}
-.pat-spec-chosen{grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--color-text-muted)}
-.pat-spec-pill{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600;
-  background:var(--color-primary-subtle);color:var(--color-primary-dark);
-  border:1px solid var(--color-primary-border)}
-.pat-spec-group{border:1px solid var(--color-border);border-radius:12px;overflow:hidden}
+.pat-spec-choice{display:inline-flex;align-items:center;gap:.375rem;margin-bottom:16px;
+  padding:5px 10px;border-radius:999px;
+  background:var(--color-primary);color:var(--color-on-primary);
+  font-size:.6875rem;font-weight:700;letter-spacing:.02em;line-height:1}
+.pat-spec-cols{columns:3;column-gap:16px}
+.pat-spec-group{break-inside:avoid;margin:0 0 16px;border:1px solid var(--color-border);border-radius:12px;overflow:hidden}
 .pat-spec-head{font-weight:600;font-size:15px;padding:12px 16px;background:var(--color-bg-subtle);
   border-bottom:1px solid var(--color-border);color:var(--color-text)}
 .pat-spec-table{width:100%;border-collapse:collapse}
@@ -67,12 +79,11 @@ const specCss = ({ tabletBp, mobileBp }: Breakpoints) => `
 .pat-spec-table td{padding:12px 16px;font-size:14px;vertical-align:top;line-height:1.4}
 .pat-spec-table td:first-child{color:var(--color-text-muted);width:40%;padding-right:24px}
 .pat-spec-table td:last-child{color:var(--color-text);font-weight:500}
-.pat-spec-table tr[data-pat-yours] td:first-child{box-shadow:inset 3px 0 0 var(--color-primary)}
-@media (max-width:${tabletBp}){.pat-spec{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:${mobileBp}){.pat-spec{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:${tabletBp}){.pat-spec-cols{columns:2}}
+@media (max-width:${mobileBp}){.pat-spec-cols{columns:1}}
 `
 
-export function SpecificationPanel({ payload }: { payload: unknown }) {
+export function SpecificationPanel({ payload, autoSort }: { payload: unknown; autoSort?: boolean }) {
   const view = payload as PatSpecPanelPayload
   const [variantId, setVariantId] = useState<string | null>(null)
 
@@ -102,47 +113,63 @@ export function SpecificationPanel({ payload }: { payload: unknown }) {
   const sections = view.sections
     .map((section) => ({
       ...section,
+      // The column-fill weight for auto-sort, counted from the RANGE's rows
+      // rather than the filtered ones below: a chosen variation drops rows out,
+      // and sorting on the filtered counts would shuffle the groups the moment
+      // an option is picked. The header takes about a row's height, so a named
+      // group weighs one more than its lines.
+      weight: section.rows.length + (section.name ? 1 : 0),
       rows: section.rows
         .map((row) => {
-          if (!chosen || !row.perVariant) return { ...row, yours: false }
+          if (!chosen || !row.perVariant) return { ...row }
           const value = row.perVariant[index]
           // Null is not a gap to paper over: it means this line does not apply
           // to the chair they picked (a bespoke-only range, arms on an armless
           // chair), so the line goes rather than reading blank.
           if (value == null) return null
-          return { ...row, value, yours: true }
+          return { ...row, value }
         })
-        .filter((row): row is { label: string; value: string; yours: boolean } => row !== null),
+        .filter((row): row is { label: string; value: string } => row !== null),
     }))
     .filter((section) => section.rows.length > 0)
 
   if (sections.length === 0) return null
+
+  // Tallest groups first so the big blocks anchor the columns and the small
+  // ones fill in behind them, instead of two giants sharing one column while
+  // the others run short. Sort is stable, so equal-height groups keep the
+  // owner's order; off, the owner's order stands untouched.
+  if (autoSort) sections.sort((a, b) => b.weight - a.weight)
 
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: specCss(view.breakpoints ?? DEFAULT_BREAKPOINTS) }} />
       <div className="pat-spec">
         {chosen && (
-          <div className="pat-spec-chosen">
-            <span className="pat-spec-pill">Your choice</span>
-            <span>Figures below are for the options you have picked.</span>
-          </div>
+          <span className="pat-spec-choice">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M20 6L9 17l-5-5" />
+            </svg>
+            Your choice
+          </span>
         )}
-        {sections.map((section) => (
-          <div className="pat-spec-group" key={section.id ?? '__unsectioned'}>
-            {section.name && <div className="pat-spec-head">{section.name}</div>}
-            <table className="pat-spec-table">
-              <tbody>
-                {section.rows.map((row) => (
-                  <tr key={row.label} data-pat-yours={row.yours ? '' : undefined}>
-                    <td>{row.label}</td>
-                    <td>{row.value}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ))}
+        <div className="pat-spec-cols">
+          {sections.map((section) => (
+            <div className="pat-spec-group" key={section.id ?? '__unsectioned'}>
+              {section.name && <div className="pat-spec-head">{section.name}</div>}
+              <table className="pat-spec-table">
+                <tbody>
+                  {section.rows.map((row) => (
+                    <tr key={row.label}>
+                      <td>{row.label}</td>
+                      <td>{row.value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
       </div>
     </>
   )
