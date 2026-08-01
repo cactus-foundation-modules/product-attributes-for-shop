@@ -55,6 +55,15 @@ function readSnapshot(): VariantSelectionDetail | null {
 // the table client-side. `break-inside:avoid` keeps a group whole rather than
 // letting a column boundary saw it in half.
 //
+// The 16px rhythm between groups is PADDING on a wrapper, never a margin on the
+// bordered box itself. A margin left sitting at a column break is dangling, and
+// engines disagree about what to do with it: WebKit carries it to the TOP of
+// the next column, so the first group of column three sat 16px lower than the
+// other two columns, while Blink put it at zero (measured on the live page at
+// every desktop width, before and after). Padding belongs to the wrapper's own
+// box, which `break-inside:avoid` keeps whole, so there is no stray edge left
+// at a boundary for either engine to place.
+//
 // Three columns on desktop, two on tablet and one on mobile, collapsing at the
 // site's own Styles > Spacing & Breakpoints widths (handed in by
 // lib/detail-spec-provider.ts) rather than at bespoke pixels.
@@ -71,7 +80,8 @@ const specCss = ({ tabletBp, mobileBp }: Breakpoints) => `
   background:var(--color-primary);color:var(--color-on-primary);
   font-size:.6875rem;font-weight:700;letter-spacing:.02em;line-height:1}
 .pat-spec-cols{columns:3;column-gap:16px}
-.pat-spec-group{break-inside:avoid;margin:0 0 16px;border:1px solid var(--color-border);border-radius:12px;overflow:hidden}
+.pat-spec-item{break-inside:avoid;padding-bottom:16px}
+.pat-spec-group{break-inside:avoid;margin:0;border:1px solid var(--color-border);border-radius:12px;overflow:hidden}
 .pat-spec-head{font-weight:600;font-size:15px;padding:12px 16px;background:var(--color-bg-subtle);
   border-bottom:1px solid var(--color-border);color:var(--color-text)}
 .pat-spec-table{width:100%;border-collapse:collapse}
@@ -155,18 +165,20 @@ export function SpecificationPanel({ payload, autoSort }: { payload: unknown; au
         )}
         <div className="pat-spec-cols">
           {sections.map((section) => (
-            <div className="pat-spec-group" key={section.id ?? '__unsectioned'}>
-              {section.name && <div className="pat-spec-head">{section.name}</div>}
-              <table className="pat-spec-table">
-                <tbody>
-                  {section.rows.map((row) => (
-                    <tr key={row.label}>
-                      <td>{row.label}</td>
-                      <td>{row.value}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="pat-spec-item" key={section.id ?? '__unsectioned'}>
+              <div className="pat-spec-group">
+                {section.name && <div className="pat-spec-head">{section.name}</div>}
+                <table className="pat-spec-table">
+                  <tbody>
+                    {section.rows.map((row) => (
+                      <tr key={row.label}>
+                        <td>{row.label}</td>
+                        <td>{row.value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           ))}
         </div>
