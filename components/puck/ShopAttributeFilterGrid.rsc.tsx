@@ -92,6 +92,10 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
       // is rendered, so the cap is the honest ceiling of this block.
       perPage: props.limit ?? 24,
       excludeHidden: true,
+      // Whatever the shop hides for being out of stock is gone before the
+      // filters ever see it, so this grid and shop's own agree about what is on
+      // the shelf.
+      storefront: true,
     }),
     resolveCardTemplate(props.layoutRef),
     listAttributes({ filtersOnly: true }),
