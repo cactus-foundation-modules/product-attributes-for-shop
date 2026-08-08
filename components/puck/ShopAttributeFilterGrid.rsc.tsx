@@ -125,12 +125,19 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
   const cards = await renderTaggedCards(template, items, matrix)
 
   // Drop filter options nothing on this page can match, so a category page never
-  // offers a tick that always returns nothing.
-  const offered = settings.hideEmptyValues
+  // offers a tick that always returns nothing. Picture swatches are collapsed to
+  // their small rendition where one exists - a filter tile is 40-odd pixels, and
+  // the full-size photograph exists for the 3D module, not for this - with the
+  // original as the fallback, exactly what every value showed before smalls.
+  const filtered = settings.hideEmptyValues
     ? attributes
         .map((a) => ({ ...a, values: a.values.filter((v) => (counts.get(v.id) ?? 0) > 0) }))
         .filter((a) => a.values.length > 0)
     : attributes
+  const offered = filtered.map((a) => ({
+    ...a,
+    values: a.values.map((v) => ({ ...v, swatch: v.swatchSmall ?? v.swatch })),
+  }))
 
   return (
     <>

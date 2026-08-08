@@ -18,9 +18,13 @@ const BASE = '/api/m/product-attributes-for-shop/admin'
 // hold: the library hands back a url or the admin cancels, and the pick itself
 // is the change. A value with no picture shows a dashed box, matching the dashed
 // dot an uncoloured swatch shows, and the storefront falls back to the label.
-export function SwatchImagePicker({ attributeId, value, label, onPick, disabled, size = 22 }: {
+export function SwatchImagePicker({ attributeId, value, previewUrl, label, onPick, disabled, size = 22 }: {
   attributeId: string
   value: string | null
+  // A lighter url to DRAW in the box (the value's small rendition) while `value`
+  // stays the real stored url - what a pick is compared against and what the
+  // library opens on. Null falls back to drawing `value` itself.
+  previewUrl?: string | null
   label: string
   onPick: (url: string) => void | Promise<void>
   disabled?: boolean
@@ -114,7 +118,7 @@ export function SwatchImagePicker({ attributeId, value, label, onPick, disabled,
           <span aria-hidden style={{ fontSize: '0.625rem', lineHeight: 1, color: 'var(--color-text-muted)' }}>…</span>
         ) : value ? (
           // eslint-disable-next-line @next/next/no-img-element -- media library URLs are arbitrary remote hosts, not a configured next/image loader
-          <img src={value} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+          <img src={previewUrl ?? value} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
         ) : (
           <span aria-hidden style={{ fontSize: '0.625rem', lineHeight: 1, color: dragOver ? 'var(--color-primary)' : 'var(--color-text-muted)' }}>＋</span>
         )}

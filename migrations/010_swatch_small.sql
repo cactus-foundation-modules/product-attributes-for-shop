@@ -1,0 +1,15 @@
+-- Adds a small rendition of a picture swatch, sat beside the original.
+--
+-- A picture swatch is a photograph of a real material, and the original file is
+-- deliberately big: the 3D module paints it onto models at true scale, where a
+-- small file would blur. But the storefront also draws the very same url as a
+-- 28px thumbnail on the product page and an 18px chip on category cards, so a
+-- shopper opening a category pulled down megabytes of fabric photography to
+-- paint a row of dots.
+--
+-- `swatch_small` holds the url of a shrunk copy (see lib/swatch-small.ts) made
+-- from the original. The storefront prefers it and falls back to `swatch` when
+-- it is null; the 3D module keeps reading `swatch` and never sees this column.
+-- TEXT rather than anything cleverer for the same reason `swatch` is TEXT: it
+-- is a url, and the url is the whole fact.
+ALTER TABLE "pat_attribute_values" ADD COLUMN IF NOT EXISTS "swatch_small" TEXT;

@@ -19,4 +19,9 @@ export async function productAttributesMediaReferenceRewriter(change: MediaRefer
   await prisma.$executeRaw`
     UPDATE "pat_attribute_values" SET "swatch" = ${newUrl} WHERE "swatch" = ${oldUrl}
   `
+  // The small rendition is its own library item with its own url; a move or
+  // optimise of THAT file has to land here the same way.
+  await prisma.$executeRaw`
+    UPDATE "pat_attribute_values" SET "swatch_small" = ${newUrl} WHERE "swatch_small" = ${oldUrl}
+  `
 }

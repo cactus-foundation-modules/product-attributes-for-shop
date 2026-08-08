@@ -10,6 +10,7 @@ import {
   ensureUniqueValueSlug,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 import { fileSwatchImage } from '@/modules/product-attributes-for-shop/lib/media-folder'
+import { generateSmallSwatch } from '@/modules/product-attributes-for-shop/lib/swatch-small'
 import { syncSourcedOptionValues } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
 import { isImageSwatch, isValidSwatch, SWATCH_MAX_LENGTH, SWATCH_SIZE_MAX_LENGTH } from '@/modules/product-attributes-for-shop/lib/types'
 
@@ -61,6 +62,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const swatchSize =
     parsed.data.swatchSize === undefined ? undefined : parsed.data.swatchSize?.trim() || null
 
+  // Read before the write: deciding whether the small rendition below needs
+  // remaking means knowing what the swatch WAS.
+  const previous = parsed.data.swatch !== undefined ? await getAttributeValue(id) : null
+
   await updateAttributeValue(id, {
     ...parsed.data,
     ...(swatchSize !== undefined ? { swatchSize } : {}),
@@ -84,6 +89,22 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     }
   }
 
+  // The small rendition lives and dies with the picture it was made from: a new
+  // picture gets a fresh one, a hex colour or a cleared swatch gets none, and a
+  // re-pick of the same picture keeps the one it has rather than minting a
+  // duplicate file per save. Made from the FILED url so it lands in the
+  // attribute's own folder.
+  let swatchSmall: string | null | undefined
+  if (parsed.data.swatch !== undefined) {
+    const unchanged = previous && previous.swatch === (swatch ?? null)
+    swatchSmall = unchanged
+      ? previous.swatchSmall ?? null
+      : swatch && isImageSwatch(swatch) ? await generateSmallSwatch(swatch) : null
+    if ((previous?.swatchSmall ?? null) !== swatchSmall) {
+      await updateAttributeValue(id, { swatchSmall })
+    }
+  }
+
   // Carry the edit through to every variation option value built from this
   // attribute value, and re-name the variants composed from it, so one edit here
   // is the whole job rather than the first of however many products use it.
@@ -93,6 +114,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const propagated = await syncSourcedOptionValues(id, {
     ...(label !== undefined ? { label } : {}),
     ...(parsed.data.swatch !== undefined ? { swatch } : {}),
+    ...(swatchSmall !== undefined ? { swatchSmall } : {}),
     ...(slug !== undefined ? { slug } : {}),
   })
 

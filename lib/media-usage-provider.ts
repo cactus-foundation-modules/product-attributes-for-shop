@@ -13,6 +13,8 @@ import { prisma } from '@/lib/db/prisma'
 export async function productAttributesMediaUsageProvider(): Promise<string[]> {
   const rows = await prisma.$queryRaw<{ ref: string | null }[]>`
     SELECT "swatch" AS ref FROM "pat_attribute_values" WHERE "swatch" IS NOT NULL
+    UNION ALL
+    SELECT "swatch_small" AS ref FROM "pat_attribute_values" WHERE "swatch_small" IS NOT NULL
   `
   return rows.map((r) => r.ref).filter((r): r is string => !!r)
 }

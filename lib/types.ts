@@ -67,6 +67,12 @@ export type PatAttributeValue = {
   label: string
   slug: string
   swatch: string | null
+  // The url of a small rendition of the picture above, for the storefront's
+  // thumbnails and chips - the original stays full-size for the 3D module to
+  // paint at true scale. Null (or absent, on payloads from before the column
+  // existed) means "no small copy": renderers fall back to `swatch`. Never a
+  // hex colour - a colour needs no shrinking.
+  swatchSmall?: string | null
   // The real-world size of the picture swatch above, as typed. Null on a value
   // with no picture, and on every value made before the field existed.
   swatchSize: string | null

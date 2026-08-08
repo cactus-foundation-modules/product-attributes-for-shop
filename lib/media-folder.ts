@@ -83,7 +83,7 @@ export async function findAttributeFolderId(attributeId: string): Promise<string
  * uses colours. Moving may rewrite the url (the library keys blobs by folder),
  * so the value's `swatch` is updated to match.
  */
-export async function fileSwatchImage(attributeId: string, valueId: string, swatchUrl: string): Promise<void> {
+export async function fileSwatchImage(attributeId: string, valueId: string, swatchUrl: string, smallUrl?: string | null): Promise<void> {
   const media = await prisma.media.findFirst({ where: { url: swatchUrl }, select: { id: true } })
   if (!media) return
 
@@ -106,6 +106,21 @@ export async function fileSwatchImage(attributeId: string, valueId: string, swat
     // save - the value keeps its current url and can be re-filed next time.
     console.warn(`[product-attributes-for-shop] could not file swatch image ${swatchUrl} for attribute ${attributeId}:`, err)
   }
+
+  // The small rendition is its own file and moves with the original, or the
+  // folder holds half a pair. Same shrug on failure, one picture at a time.
+  if (!smallUrl) return
+  const smallMedia = await prisma.media.findFirst({ where: { url: smallUrl }, select: { id: true } })
+  if (!smallMedia) return
+  try {
+    const movedSmall = await moveOrRenameMedia(smallMedia.id, { targetFolderId: folderId, collision: 'suffix' })
+    if (movedSmall && movedSmall.url !== smallUrl) {
+      await updateAttributeValue(valueId, { swatchSmall: movedSmall.url })
+      await syncSourcedOptionValues(valueId, { swatchSmall: movedSmall.url })
+    }
+  } catch (err) {
+    console.warn(`[product-attributes-for-shop] could not file small swatch image ${smallUrl} for attribute ${attributeId}:`, err)
+  }
 }
 
 /**
@@ -127,7 +142,7 @@ export async function refileAttributeSwatches(attributeId: string): Promise<void
   const values = await listAttributeSwatches(attributeId)
   for (const value of values) {
     if (!isImageSwatch(value.swatch)) continue
-    await fileSwatchImage(attributeId, value.id, value.swatch)
+    await fileSwatchImage(attributeId, value.id, value.swatch, value.swatchSmall)
   }
 }
 
