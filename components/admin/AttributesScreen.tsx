@@ -204,7 +204,7 @@ export function AttributesScreen() {
     <div>
       <div className="page-header"><h1 className="page-title">Product attributes</h1></div>
 
-      <p style={{ color: 'var(--color-text-muted)', marginTop: 0 }}>
+      <p style={{ color: 'var(--color-text-secondary)', marginTop: 0 }}>
         Attributes are the things shoppers filter by - Material, Colour, Room, and so on. Define them here,
         then tick the ones that apply from each product&rsquo;s own editor. The arrows set the order shoppers
         see the filters in.
@@ -255,7 +255,7 @@ export function AttributesScreen() {
 
       <section style={{ border: '1px solid var(--color-border)', borderRadius: 12, padding: '1rem 1.25rem', background: 'var(--color-surface)', marginBottom: '1.5rem' }}>
         <h2 style={{ fontSize: '0.9375rem', margin: '0 0 0.75rem' }}>Add a group</h2>
-        <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+        <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
           Groups only tidy up this screen - shoppers still see every attribute you have ticked for filters,
           in the same order. Any picture swatches move to match when you file an attribute away.
         </p>
@@ -275,18 +275,18 @@ export function AttributesScreen() {
 
       <section style={{ border: '1px solid var(--color-border)', borderRadius: 12, padding: '1rem 1.25rem', background: 'var(--color-surface)', marginBottom: '1.5rem' }}>
         <h2 style={{ fontSize: '0.9375rem', margin: '0 0 0.75rem' }}>Tidy picture folders</h2>
-        <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+        <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
           Files every attribute&apos;s swatch pictures into its own folder in the media library
           (Shop / Attributes), and points anything using them at the new home. Safe to press
           any time - pictures already in the right place stay put.
         </p>
         <button className="btn btn-secondary" disabled={busy} onClick={() => void tidySwatches()}>Tidy picture folders</button>
-        {tidied && <span style={{ marginLeft: '0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>{tidied}</span>}
+        {tidied && <span style={{ marginLeft: '0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>{tidied}</span>}
       </section>
 
       <section style={{ border: '1px solid var(--color-border)', borderRadius: 12, padding: '1rem 1.25rem', background: 'var(--color-surface)', marginBottom: '1.5rem' }}>
         <h2 style={{ fontSize: '0.9375rem', margin: '0 0 0.75rem' }}>Small copies for the shop</h2>
-        <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+        <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
           Makes a small copy of each picture swatch for the shop&apos;s thumbnails and category pages,
           so shoppers stop downloading the full-size photographs just to see the little dots. The
           originals stay put for anything that needs them at full size, like the 3D views. New
@@ -294,11 +294,11 @@ export function AttributesScreen() {
           press any time.
         </p>
         <button className="btn btn-secondary" disabled={busy} onClick={() => void makeSmallCopies()}>Make small copies</button>
-        {smallProgress && <span style={{ marginLeft: '0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }} role="status">{smallProgress}</span>}
+        {smallProgress && <span style={{ marginLeft: '0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }} role="status">{smallProgress}</span>}
       </section>
 
       {!loaded ? null : attributes.length === 0 && groups.length === 0 ? (
-        <p style={{ color: 'var(--color-text-muted)' }}>No attributes yet. Add one above to get started.</p>
+        <p style={{ color: 'var(--color-text-secondary)' }}>No attributes yet. Add one above to get started.</p>
       ) : (
         <div style={{ display: 'grid', gap: '2rem' }}>
           {sections.map((section, sectionIndex) => (
@@ -313,7 +313,7 @@ export function AttributesScreen() {
                 onMove={moveGroup}
               />
               {section.items.length === 0 ? (
-                <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem', margin: 0 }}>
+                <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', margin: 0 }}>
                   Nothing in this group yet. Move an attribute in with its Group dropdown.
                 </p>
               ) : (
@@ -401,7 +401,7 @@ function GroupHeader({
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', margin: '0 0 0.75rem' }}>
-      <h2 style={{ fontSize: '0.875rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--color-text-muted)', margin: 0 }}>
+      <h2 style={{ fontSize: '0.875rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--color-text-secondary)', margin: 0 }}>
         {group ? group.name : 'Not in a group'}
       </h2>
       {group && (
@@ -586,17 +586,17 @@ function AttributeCard({
         <div>
           <h3 style={{ fontSize: '0.9375rem', margin: 0 }}>
             {attribute.name}
-            <span style={{ fontWeight: 400, color: 'var(--color-text-muted)', marginLeft: '0.5rem', fontSize: '0.8125rem' }}>
+            <span style={{ fontWeight: 400, color: 'var(--color-text-secondary)', marginLeft: '0.5rem', fontSize: '0.8125rem' }}>
               {CONTROL_LABELS[attribute.controlType]}
             </span>
           </h3>
           {attribute.sourceOptionName && (
-            <p style={{ margin: '0.25rem 0 0', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+            <p style={{ margin: '0.25rem 0 0', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
               Imported from the &ldquo;{attribute.sourceOptionName}&rdquo; variation option.
             </p>
           )}
           {renameNote && (
-            <p role="status" style={{ margin: '0.25rem 0 0', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+            <p role="status" style={{ margin: '0.25rem 0 0', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
               {renameNote}
             </p>
           )}
@@ -623,7 +623,7 @@ function AttributeCard({
             Rename
           </button>
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.875rem' }}>
-            <span style={{ color: 'var(--color-text-muted)' }}>Group</span>
+            <span style={{ color: 'var(--color-text-secondary)' }}>Group</span>
             <select
               className="form-control"
               style={{ width: 'auto', fontSize: '0.8125rem', padding: '0.25rem 0.5rem' }}
@@ -662,7 +662,7 @@ function AttributeCard({
 
       <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.375rem', flexWrap: 'wrap' }}>
         {attribute.values.length === 0 && (
-          <span style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)' }}>No values yet.</span>
+          <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>No values yet.</span>
         )}
         {shownValues.map((value) => (
           <span
@@ -694,7 +694,7 @@ function AttributeCard({
               onDragEnd={() => setDraggedValueId(null)}
               aria-label={`Drag to reorder ${value.label}`}
               title="Drag to reorder"
-              style={{ cursor: busy ? 'default' : 'grab', color: 'var(--color-text-muted)', lineHeight: 1, userSelect: 'none' }}
+              style={{ cursor: busy ? 'default' : 'grab', color: 'var(--color-text-secondary)', lineHeight: 1, userSelect: 'none' }}
             >
               ⠿
             </span>
@@ -780,7 +780,7 @@ function AttributeCard({
                 padding: 0,
                 font: 'inherit',
                 fontSize: '0.6875rem',
-                color: 'var(--color-text-muted)',
+                color: 'var(--color-text-secondary)',
                 cursor: busy ? 'default' : 'pointer',
                 textDecoration: 'underline dotted',
                 textUnderlineOffset: '0.2em',
@@ -816,7 +816,7 @@ function AttributeCard({
                   padding: 0,
                   font: 'inherit',
                   fontSize: '0.75rem',
-                  color: 'var(--color-text-muted)',
+                  color: 'var(--color-text-secondary)',
                   cursor: busy ? 'default' : 'pointer',
                   textDecoration: 'underline dotted',
                   textUnderlineOffset: '0.2em',
@@ -830,7 +830,7 @@ function AttributeCard({
               aria-label={`Delete ${value.label}`}
               disabled={busy}
               onClick={() => void send(`${base}/values/${value.id}`, 'DELETE')}
-              style={{ border: 0, background: 'none', cursor: 'pointer', color: 'var(--color-text-muted)', padding: 0, lineHeight: 1 }}
+              style={{ border: 0, background: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)', padding: 0, lineHeight: 1 }}
             >
               ×
             </button>

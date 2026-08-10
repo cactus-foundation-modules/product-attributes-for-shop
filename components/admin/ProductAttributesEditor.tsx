@@ -455,7 +455,7 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
           )}
         </div>
 
-        {status && <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>{status}</p>}
+        {status && <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>{status}</p>}
 
         {data.attributes.length === 0 ? (
           <p className="spe-empty">
@@ -476,7 +476,7 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                     return (
                       <div key={h.key} style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
-                          <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+                          <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
                             This attribute has been deleted from the shop.
                           </span>
                           <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeHelping(h.key)}>Remove</button>
@@ -499,7 +499,7 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                             aria-label={`Name for this helping of ${attribute.name}`}
                             onChange={(e) => updateHelping(h.key, (prev) => ({ ...prev, name: e.target.value }))}
                           />
-                          <span style={{ fontSize: '0.75rem', color: problem ? 'var(--color-danger)' : 'var(--color-text-muted)' }}>
+                          <span style={{ fontSize: '0.75rem', color: problem ? 'var(--color-danger)' : 'var(--color-text-secondary)' }}>
                             {problem
                               ?? (repeat
                                 ? `One of several helpings of ${attribute.name} on this product, so it needs a name of its own.`
@@ -541,7 +541,7 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                             />
                             Use for variations
                             {repeat && h.useForVariations && (
-                              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
                                 (its own column, headed {name})
                               </span>
                             )}
@@ -558,13 +558,13 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                       </div>
 
                       {h.useForVariations ? (
-                        <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                        <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
                           {hasVariants
                             ? 'Set each variant’s value in the new column on the Variations tab. Add the choices it offers below.'
                             : 'Add variants on the Variations tab, then set each one’s value there. Add the choices it offers below.'}
                         </p>
                       ) : attribute.values.length === 0 ? (
-                        <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>No values set up yet.</span>
+                        <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>No values set up yet.</span>
                       ) : (
                         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                           {attribute.values.map((value) => (
@@ -644,13 +644,13 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
               has since been deleted shop-wide), so the buckets below would
               otherwise be an unexplained row of empties. */}
           {specHelpings.length === 0 && notShownHelpings.length === 0 && (
-            <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+            <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
               Add an attribute to this product above, then it turns up here to drag onto the page.
             </p>
           )}
 
           <div style={{ display: 'grid', gap: '0.75rem' }}>
-            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
               On the Specification tab
             </div>
 
@@ -726,7 +726,7 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
               </button>
             </div>
 
-            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em', marginTop: '0.25rem' }}>
+            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em', marginTop: '0.25rem' }}>
               Not shown on the page
             </div>
             <SpecBucket
@@ -793,7 +793,7 @@ function SpecBucket({
       }}
     >
       {chips.length === 0 ? (
-        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', padding: '0 0.25rem' }}>{emptyHint}</span>
+        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', padding: '0 0.25rem' }}>{emptyHint}</span>
       ) : (
         chips.map((h) => (
           <span
@@ -826,11 +826,11 @@ function SpecBucket({
               borderRadius: 'var(--radius-sm)',
               border: '1px solid var(--color-border)',
               background: hidden ? 'var(--color-surface)' : 'var(--color-bg-subtle)',
-              color: hidden ? 'var(--color-text-muted)' : 'var(--color-text)',
+              color: hidden ? 'var(--color-text-secondary)' : 'var(--color-text)',
               opacity: draggedKey === h.key ? 0.5 : 1,
             }}
           >
-            <span aria-hidden style={{ color: 'var(--color-text-muted)' }}>⠿</span>
+            <span aria-hidden style={{ color: 'var(--color-text-secondary)' }}>⠿</span>
             {displayName(h)}
           </span>
         ))

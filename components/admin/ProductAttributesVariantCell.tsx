@@ -104,7 +104,7 @@ function useVariationData(productId: string): Entry {
   return entry
 }
 
-const muted: React.CSSProperties = { color: 'var(--color-text-muted)', fontSize: '0.8125rem' }
+const muted: React.CSSProperties = { color: 'var(--color-text-secondary)', fontSize: '0.8125rem' }
 
 const control: React.CSSProperties = {
   padding: '0.25rem 0.375rem',

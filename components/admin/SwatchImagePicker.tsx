@@ -111,16 +111,16 @@ export function SwatchImagePicker({ attributeId, value, previewUrl, label, onPic
           cursor: busy ? 'progress' : 'pointer',
           border: dragOver
             ? '2px solid var(--color-primary)'
-            : value ? '1px solid var(--color-border)' : '1px dashed var(--color-text-muted)',
+            : value ? '1px solid var(--color-border)' : '1px dashed var(--color-text-secondary)',
         }}
       >
         {working ? (
-          <span aria-hidden style={{ fontSize: '0.625rem', lineHeight: 1, color: 'var(--color-text-muted)' }}>…</span>
+          <span aria-hidden style={{ fontSize: '0.625rem', lineHeight: 1, color: 'var(--color-text-secondary)' }}>…</span>
         ) : value ? (
           // eslint-disable-next-line @next/next/no-img-element -- media library URLs are arbitrary remote hosts, not a configured next/image loader
           <img src={previewUrl ?? value} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
         ) : (
-          <span aria-hidden style={{ fontSize: '0.625rem', lineHeight: 1, color: dragOver ? 'var(--color-primary)' : 'var(--color-text-muted)' }}>＋</span>
+          <span aria-hidden style={{ fontSize: '0.625rem', lineHeight: 1, color: dragOver ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}>＋</span>
         )}
       </button>
       {error && (
