@@ -1,9 +1,9 @@
 {
   "name": "product-attributes-for-shop",
-  "version": "0.1.46",
+  "version": "0.1.47",
   "tablePrefix": "pat_",
   "description": "Filterable product attributes for the shop: define attributes like Material or Colour, put a set of them on each product, set a value per variant, hide any from the public filters, show any on the product page's Specification tab in sections of your own, and let shoppers narrow the catalogue by the rest.",
-  "requiresCoreVersion": "0.5.493",
+  "requiresCoreVersion": "0.5.1026",
   "requiresModules": [
     {
       "name": "shop",
@@ -21,18 +21,18 @@
       "component": "ProductAttributesSettingsTab"
     }
   ],
-  "navGroupLabel": "Shop",
-  "navEntries": [
-    {
-      "label": "Product attributes",
-      "path": "/m/product-attributes-for-shop/attributes",
-      "icon": "<path d=\"M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z\"/><circle cx=\"7\" cy=\"7\" r=\"1.5\"/>",
-      "permission": "shop.products"
-    }
-  ],
   "requiredEnvVars": [],
   "cookieCategories": [],
   "extensionPoints": [
+    {
+      "point": "shop.products-tabs",
+      "id": "product-attributes-for-shop",
+      "label": "Attributes",
+      "order": 25,
+      "permission": "shop.products",
+      "import": "./components/admin/AttributesTab",
+      "component": "AttributesTab"
+    },
     {
       "point": "shop.product-editor-sections",
       "id": "product-attributes-inline",

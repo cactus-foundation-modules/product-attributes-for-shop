@@ -1,14 +1,9 @@
-import { getSessionFromCookie } from '@/lib/auth/session'
-import { hasShopPermission } from '@/modules/shop/lib/access'
-import { AttributesScreen } from '@/modules/product-attributes-for-shop/components/admin/AttributesScreen'
+import { redirect } from 'next/navigation'
+import { headers } from 'next/headers'
 
-export const metadata = { title: 'Product attributes — Admin' }
-
-export default async function ProductAttributesPage() {
-  const user = await getSessionFromCookie()
-  if (!user) return null
-  const canAccess = await hasShopPermission(user, 'shop.products', { allowAccess: true })
-  if (!canAccess) return <div className="alert alert-danger">You do not have permission to manage product attributes.</div>
-
-  return <AttributesScreen />
+// This screen is now a tab on Shop > Catalogue rather than a sidebar link of its own.
+// The route stays put so old bookmarks land on the tab instead of a 404.
+export default async function ProductAttributesRedirect() {
+  const adminPath = (await headers()).get('x-cactus-admin-path') ?? 'cactus-admin'
+  return redirect(`/${adminPath}/m/shop/products?tab=product-attributes-for-shop`)
 }
