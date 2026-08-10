@@ -5,7 +5,7 @@ import { listProducts, getProductMedia, getProductTagIds } from '@/modules/shop/
 import { listTags, resolveCategoryProductFilter } from '@/modules/shop/lib/db/catalogue'
 import { getShopConfigCached } from '@/modules/shop/lib/config'
 import { getShopBreakpoints } from '@/modules/shop/lib/breakpoints'
-import { resolveCardTemplate, buildCardContext } from '@/modules/shop/lib/card-template'
+import { resolveCardTemplate, buildCardContext, buildTagMaps } from '@/modules/shop/lib/card-template'
 import { resolveCardFromPrices } from '@/modules/shop/lib/card-price'
 import { injectShopProductCardEmbed } from '@/modules/shop/lib/inject-part-context'
 import { formatMoney } from '@/modules/shop/lib/money'
@@ -114,11 +114,11 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
     resolveCardFromPrices(productIds),
   ])
 
-  const tagById = new Map(tags.map((t) => [t.id, t.slug]))
+  const { tagById, tagsById } = buildTagMaps(tags)
   const items: CardItem[] = await Promise.all(
     products.map(async (product) => {
       const [media, tagIds] = await Promise.all([getProductMedia(product.id), getProductTagIds(product.id)])
-      return { product, ctx: buildCardContext(product, media, tagById, tagIds, config.currencySymbol, config, fromPrices.get(product.id) ?? null) }
+      return { product, ctx: buildCardContext(product, media, tagById, tagIds, config.currencySymbol, config, fromPrices.get(product.id) ?? null, undefined, tagsById) }
     }),
   )
 
