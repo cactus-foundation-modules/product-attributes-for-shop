@@ -6,10 +6,11 @@ import { attributePageNumbers } from '@/modules/product-attributes-for-shop/comp
 // effect that walks the DOM, and it is the part that can quietly drop a product.
 
 // Exactly the window the paging effect computes.
-function windowFor(paginate: 'more' | 'pages', pageSize: number, page: number, shown: number): [number, number] {
+function windowFor(paginate: 'more' | 'pages' | 'scroll', pageSize: number, page: number, shown: number): [number, number] {
   const size = Math.max(1, Math.floor(pageSize) || 1)
-  const from = paginate === 'more' ? 0 : (page - 1) * size
-  const to = paginate === 'more' ? Math.max(size, shown) : from + size
+  const growing = paginate === 'more' || paginate === 'scroll'
+  const from = growing ? 0 : (page - 1) * size
+  const to = growing ? Math.max(size, shown) : from + size
   return [from, to]
 }
 
@@ -40,6 +41,18 @@ describe('paging window over the filtered set', () => {
 
   it('survives a page size of zero', () => {
     expect(windowFor('pages', 0, 1, 0)).toEqual([0, 1])
+  })
+
+  // Scroll and "show more" share one window - only the trigger differs - so
+  // every guarantee proved for one has to hold for the other.
+  it('scrolls the same window "show more" grows', () => {
+    for (const shown of [0, 24, 96, 217, 999]) {
+      expect(windowFor('scroll', 24, 1, shown)).toEqual(windowFor('more', 24, 1, shown))
+    }
+  })
+
+  it('reaches the whole category by scrolling', () => {
+    expect(windowFor('scroll', 24, 1, 217)).toEqual([0, 217])
   })
 })
 

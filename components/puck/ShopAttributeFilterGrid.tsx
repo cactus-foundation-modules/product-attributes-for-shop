@@ -100,6 +100,7 @@ export const shopAttributeFilterGridPuckComponent = {
       label: 'When there are more products than fit',
       options: [
         { value: 'none', label: 'Show them all on one page' },
+      { value: 'scroll', label: 'Load more as the shopper scrolls' },
         { value: 'more', label: 'A "Show more" button' },
         { value: 'pages', label: 'Numbered pages' },
       ],

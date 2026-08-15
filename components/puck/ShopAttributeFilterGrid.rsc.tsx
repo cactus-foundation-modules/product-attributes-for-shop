@@ -78,7 +78,7 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
   // Paging off is this block exactly as it was: fetch `limit`, render `limit`,
   // no pager, default ceiling. Only a paged grid reaches past 100, and only
   // because the shell now has somewhere to put the rest.
-  const paginate = props.paginate === 'more' || props.paginate === 'pages' ? props.paginate : 'none'
+  const paginate = props.paginate === 'more' || props.paginate === 'pages' || props.paginate === 'scroll' ? props.paginate : 'none'
   const limit = props.limit ?? 24
   const pageSize = paginate === 'none' ? limit : Math.max(1, Math.floor(Number(props.pageSize)) || limit)
   const fetchCount = paginate === 'none' ? limit : HARD_MAX_PER_PAGE

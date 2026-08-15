@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PatAttributeWithValues } from '@/modules/product-attributes-for-shop/lib/types'
 import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
 import { matchesSelection } from '@/modules/product-attributes-for-shop/lib/filter-logic'
@@ -21,7 +21,11 @@ export type FilterShellProps = {
   // before: every matching card on screen at once. Inside the shell rather than
   // around it because the set being paged is the FILTERED set - see the paging
   // effect below, and the identical reasoning in filters-for-shop.
-  paginate?: 'none' | 'more' | 'pages'
+  // 'scroll' is 'more' that presses its own button - same window, same handler,
+  // triggered by a sentinel coming into view. The button stays either way: an
+  // observer is unreachable by keyboard, invisible to a screen reader, and does
+  // nothing where the page never scrolls (a filtered list of nine).
+  paginate?: 'none' | 'more' | 'pages' | 'scroll'
   pageSize?: number
   moreLabel?: string
 }
@@ -149,8 +153,9 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
     const size = Math.max(1, Math.floor(pageSize) || 1)
     const matching = [...root.querySelectorAll<HTMLElement>('[data-pat-product]')]
       .filter((el) => !el.hasAttribute('data-pat-hidden'))
-    const from = paginate === 'more' ? 0 : (page - 1) * size
-    const to = paginate === 'more' ? Math.max(size, shownLimit) : from + size
+    const growing = paginate === 'more' || paginate === 'scroll'
+    const from = growing ? 0 : (page - 1) * size
+    const to = growing ? Math.max(size, shownLimit) : from + size
     matching.forEach((el, i) => {
       const onThisPage = i >= from && i < to
       el.style.display = onThisPage ? '' : 'none'
@@ -186,14 +191,39 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
   // back to the whole set before the first filter pass has run.
   const matchingTotal = visibleCount ?? Object.keys(matrix).length
   const lastPage = Math.max(1, Math.ceil(matchingTotal / Math.max(1, pageSize)))
+  // One way to grow the window, whether a thumb or the observer asked for it.
+  const growing = paginate === 'more' || paginate === 'scroll'
+  const moreToShow = growing && shownLimit < matchingTotal
+  const showMore = useCallback(() => setShownLimit((n) => n + pageSize), [pageSize])
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (paginate !== 'scroll' || !moreToShow) return
+    const node = sentinelRef.current
+    // No sentinel or no observer leaves the button doing the whole job, which
+    // it can, because it never went away.
+    if (!node || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries.some((e) => e.isIntersecting)) showMore() },
+      // Load before the shopper reaches the end, so the next row is usually
+      // there by the time they arrive at where it goes.
+      { rootMargin: '400px 0px' },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [paginate, moreToShow, showMore])
   const pager =
     paginate !== 'none' && matchingTotal > pageSize ? (
       <nav className="pat-pager" aria-label="Product pages">
-        {paginate === 'more' ? (
-          shownLimit < matchingTotal && (
-            <button type="button" className="pat-pager-more" onClick={() => setShownLimit((n) => n + pageSize)}>
-              {moreLabel || 'Show more'}
-            </button>
+        {growing ? (
+          moreToShow && (
+            <>
+              <button type="button" className="pat-pager-more" onClick={showMore}>
+                {moreLabel || 'Show more'}
+              </button>
+              {/* What the observer watches: a scroll position, not content, so
+                  it is empty and hidden from assistive tech. */}
+              {paginate === 'scroll' && <div ref={sentinelRef} aria-hidden="true" style={{ width: '100%', height: 1 }} />}
+            </>
           )
         ) : (
           <ul className="pat-pager-pages">
