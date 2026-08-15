@@ -62,11 +62,22 @@ export function attributePageNumbers(current: number, last: number): (number | '
 
 // useLayoutEffect where there is a DOM, useEffect where there is not.
 //
-// The paging pass has to land BEFORE the browser paints. A plain useEffect runs
-// after paint, so a category of 217 products drew all 217 cards and then hid 193
-// of them - a visible flash and a scrollbar that jumps under the shopper's hand.
-// useLayoutEffect runs before paint and the shopper only ever sees the page they
-// asked for.
+// EVERY pass that writes to the cards uses this - filter, sort and paging alike -
+// and they must all use the SAME one. React runs ALL layout effects before ANY
+// passive effect, so mixing the two silently reorders them however they are
+// declared: paging as a layout effect beside a passive filter pass ran FIRST,
+// and the filter pass then cleared `display` on its way past and put every card
+// back on screen. That shipped, and the live category page duly showed all 214
+// chairs at once with 190 of them still marked off-page.
+//
+// So the rule is: same phase for all three, and declaration order decides the
+// rest. The observer below is deliberately NOT one of these - it only attaches a
+// listener and has no business blocking paint.
+//
+// The phase is `layout` rather than passive because these passes have to land
+// before the browser paints. After paint, a category of 217 drew all 217 cards
+// and then hid 193 - a visible flash with the scrollbar jumping under the
+// shopper's hand.
 //
 // React warns if useLayoutEffect is called during a server render, and this
 // component IS server-rendered, so the choice is made once here rather than
@@ -112,7 +123,7 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
   // Show/hide the server-rendered cards in place, then mirror the selection into
   // the URL so a filtered view can be shared or reached with the back button.
   // replaceState (not a router push) keeps the server render out of it entirely.
-  useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     const root = gridRef.current
     if (!root) return
     let shown = 0
