@@ -17,6 +17,13 @@ export type FilterShellProps = {
   // Product Card layout, each tagged data-pat-product, and are only ever
   // shown/hidden here - never re-rendered, so the card design is untouched.
   children: React.ReactNode
+  // Paging over whatever the filters have left. 'none' is what this shell did
+  // before: every matching card on screen at once. Inside the shell rather than
+  // around it because the set being paged is the FILTERED set - see the paging
+  // effect below, and the identical reasoning in filters-for-shop.
+  paginate?: 'none' | 'more' | 'pages'
+  pageSize?: number
+  moreLabel?: string
 }
 
 function readInitialSelection(attributes: PatAttributeWithValues[]): Map<string, Set<string>> {
@@ -33,10 +40,42 @@ function readInitialSelection(attributes: PatAttributeWithValues[]): Map<string,
   return selected
 }
 
-export function AttributeFilterShell({ attributes, matrix, counts, columns, position, showCounts, children }: FilterShellProps) {
+// First, last and a window either side of the current page. A local copy rather
+// than an import from another module: this module owns its own UI, and reaching
+// into a sibling for a list of numbers is exactly the coupling the module rules
+// are there to prevent.
+export function attributePageNumbers(current: number, last: number): (number | '\u2026')[] {
+  if (last <= 7) return Array.from({ length: last }, (_, i) => i + 1)
+  const out: (number | '\u2026')[] = [1]
+  const from = Math.max(2, current - 1)
+  const to = Math.min(last - 1, current + 1)
+  if (from > 2) out.push('\u2026')
+  for (let n = from; n <= to; n++) out.push(n)
+  if (to < last - 1) out.push('\u2026')
+  out.push(last)
+  return out
+}
+
+export function AttributeFilterShell({ attributes, matrix, counts, columns, position, showCounts, children, paginate = 'none', pageSize = 24, moreLabel }: FilterShellProps) {
   const gridRef = useRef<HTMLDivElement>(null)
   const [selected, setSelected] = useState<Map<string, Set<string>>>(new Map())
   const [visibleCount, setVisibleCount] = useState<number | null>(null)
+  // How many of the matching cards are on screen. 'more' grows this window;
+  // 'pages' slides it. Both are ignored entirely when paginate is 'none'.
+  const [shown, setShown] = useState(pageSize)
+  const [page, setPage] = useState(1)
+  // Back to the top whenever the filtered set changes, or a shopper on page 5
+  // who ticks a colour that leaves four products lands on an empty grid.
+  // Adjusted during render rather than in an effect - React's own pattern for
+  // state that must follow its inputs, and it avoids painting the wrong page
+  // first and correcting it after.
+  const pageResetKey = `${[...selected.entries()].map(([a, v]) => `${a}:${[...v].sort().join(',')}`).sort().join('|')}|${pageSize}`
+  const [lastResetKey, setLastResetKey] = useState(pageResetKey)
+  if (pageResetKey !== lastResetKey) {
+    setLastResetKey(pageResetKey)
+    setShown(pageSize)
+    setPage(1)
+  }
 
   // Read the URL only after mount: the cards are server-rendered and must not
   // depend on the query string, or the markup would mismatch on hydration.
@@ -82,6 +121,30 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
     window.history.replaceState(null, '', query ? `?${query}` : window.location.pathname)
   }, [selected, matrix, attributes, valueSlugById])
 
+  // The paging window, applied over whatever the filter pass has left.
+  //
+  // Declared AFTER the filter effect on purpose: effects run in declaration
+  // order, so by the time this reads the DOM the non-matching cards already
+  // carry data-pat-hidden. It uses the same selector as that pass so the two
+  // walk the cards in the same order, and writes the same `display` property -
+  // they never disagree, because this only ever hides cards the filter pass has
+  // already shown.
+  useEffect(() => {
+    if (paginate === 'none') return
+    const root = gridRef.current
+    if (!root) return
+    const size = Math.max(1, Math.floor(pageSize) || 1)
+    const matching = [...root.querySelectorAll<HTMLElement>('[data-pat-product]')]
+      .filter((el) => !el.hasAttribute('data-pat-hidden'))
+    const from = paginate === 'more' ? 0 : (page - 1) * size
+    const to = paginate === 'more' ? Math.max(size, shown) : from + size
+    matching.forEach((el, i) => {
+      const onThisPage = i >= from && i < to
+      el.style.display = onThisPage ? '' : 'none'
+      el.toggleAttribute('data-pat-offpage', !onThisPage)
+    })
+  }, [paginate, pageSize, page, shown, selected, matrix])
+
   function toggle(attributeId: string, valueId: string) {
     setSelected((prev) => {
       const next = new Map(prev)
@@ -105,11 +168,58 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
 
   const activeCount = [...selected.values()].reduce((n, s) => n + s.size, 0)
   const shownAttributes = attributes.filter((a) => a.values.length > 0)
+
+  // How many cards the filters have left - what the pager pages over. Falls
+  // back to the whole set before the first filter pass has run.
+  const matchingTotal = visibleCount ?? Object.keys(matrix).length
+  const lastPage = Math.max(1, Math.ceil(matchingTotal / Math.max(1, pageSize)))
+  const pager =
+    paginate !== 'none' && matchingTotal > pageSize ? (
+      <nav className="pat-pager" aria-label="Product pages">
+        {paginate === 'more' ? (
+          shown < matchingTotal && (
+            <button type="button" className="pat-pager-more" onClick={() => setShown((n) => n + pageSize)}>
+              {moreLabel || 'Show more'}
+            </button>
+          )
+        ) : (
+          <ul className="pat-pager-pages">
+            <li>
+              <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} aria-label="Previous page">
+                &lsaquo;
+              </button>
+            </li>
+            {attributePageNumbers(page, lastPage).map((n, i) =>
+              n === '\u2026' ? (
+                <li key={`gap-${i}`} className="pat-pager-gap" aria-hidden="true">&hellip;</li>
+              ) : (
+                <li key={n}>
+                  <button type="button" onClick={() => setPage(n as number)} aria-current={n === page ? 'page' : undefined} aria-label={`Page ${n}`}>
+                    {n}
+                  </button>
+                </li>
+              ),
+            )}
+            <li>
+              <button type="button" onClick={() => setPage((p) => Math.min(lastPage, p + 1))} disabled={page === lastPage} aria-label="Next page">
+                &rsaquo;
+              </button>
+            </li>
+          </ul>
+        )}
+      </nav>
+    ) : null
+
+  // A page with no attribute filters at all still pages - the products are just
+  // as unreachable there, and this branch renders the same grid.
   if (shownAttributes.length === 0) {
     return (
-      <div className="shop-grid" style={{ ['--shop-cols' as string]: String(columns) } as React.CSSProperties} ref={gridRef}>
-        {children}
-      </div>
+      <>
+        <div className="shop-grid" style={{ ['--shop-cols' as string]: String(columns) } as React.CSSProperties} ref={gridRef}>
+          {children}
+        </div>
+        {pager}
+      </>
     )
   }
 
@@ -219,6 +329,7 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
             <button type="button" className="pat-clear" onClick={() => setSelected(new Map())}>Clear them</button> and try again.
           </p>
         )}
+        {pager}
       </div>
     </div>
   )

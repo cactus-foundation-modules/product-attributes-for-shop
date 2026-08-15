@@ -16,6 +16,12 @@ export type ShopAttributeFilterGridProps = {
   filterPosition?: string
   showCounts?: string
   layoutRef?: LayoutRef | null
+  // Paging. 'none' is what this block did before and stays the default. On,
+  // "Number of products" becomes the page size and the grid fetches the whole
+  // list behind it, up to shop's HARD_MAX_PER_PAGE.
+  paginate?: string
+  pageSize?: number
+  moreLabel?: string
 }
 
 function FilterGridSkeleton({ columns, position }: { columns: number; position: string }) {
@@ -87,6 +93,19 @@ export const shopAttributeFilterGridPuckComponent = {
         { value: 'no', label: 'No' },
       ],
     },
+    // Paged over whatever the filters have left, not the raw list - see
+    // AttributeFilterShell. Off by default so saved layouts do not move.
+    paginate: {
+      type: 'select' as const,
+      label: 'When there are more products than fit',
+      options: [
+        { value: 'none', label: 'Show them all on one page' },
+        { value: 'more', label: 'A "Show more" button' },
+        { value: 'pages', label: 'Numbered pages' },
+      ],
+    },
+    pageSize: { type: 'number' as const, label: 'Products per page (blank uses the number above)', min: 1, max: 100 },
+    moreLabel: { type: 'text' as const, label: '"Show more" button label' },
     layoutRef: layoutField,
   },
   defaultProps: {
@@ -97,6 +116,9 @@ export const shopAttributeFilterGridPuckComponent = {
     columns: 3,
     filterPosition: 'left',
     showCounts: 'yes',
+    paginate: 'none',
+    pageSize: undefined,
+    moreLabel: 'Show more',
     layoutRef: null,
   },
   render: ShopAttributeFilterGrid,

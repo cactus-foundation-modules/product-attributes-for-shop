@@ -54,5 +54,19 @@ export function attributeFilterCss({ tabletBp, mobileBp }: Breakpoints): string 
   .pat-wrap{gap:20px}
   .pat-filters{gap:14px}
 }
+
+/* Pager. Only rendered when the block asks for paging, so a grid that is not
+   paged gains none of it. 44px targets, colour tokens only. */
+.pat-pager{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:28px}
+.pat-pager-more{min-height:44px;padding:0 26px;border:1px solid var(--color-border);border-radius:9999px;background:var(--color-surface);color:var(--color-fg);font:inherit;font-weight:600;font-size:15px;cursor:pointer;transition:background .12s ease}
+.pat-pager-more:hover{background:var(--color-bg-subtle)}
+.pat-pager-more:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
+.pat-pager-pages{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;list-style:none;margin:0;padding:0}
+.pat-pager-pages button{min-width:44px;min-height:44px;padding:0 10px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-surface);color:var(--color-fg);font:inherit;font-size:14px;cursor:pointer}
+.pat-pager-pages button:hover:not(:disabled){background:var(--color-bg-subtle)}
+.pat-pager-pages button:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
+.pat-pager-pages button[aria-current="page"]{background:var(--color-primary);color:var(--color-on-primary);border-color:var(--color-primary);font-weight:600}
+.pat-pager-pages button:disabled{opacity:.45;cursor:not-allowed}
+.pat-pager-gap{display:flex;align-items:flex-end;min-width:20px;justify-content:center;color:var(--color-text-muted);font-size:14px}
 `
 }

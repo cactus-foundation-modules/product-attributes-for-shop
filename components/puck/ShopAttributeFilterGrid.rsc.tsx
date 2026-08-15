@@ -1,7 +1,7 @@
 import { connection } from 'next/server'
 import { Render } from '@puckeditor/core/rsc'
 import type { Data } from '@puckeditor/core'
-import { listProducts, getProductMedia, getProductTagIds } from '@/modules/shop/lib/db'
+import { listProducts, getProductMedia, getProductTagIds, HARD_MAX_PER_PAGE } from '@/modules/shop/lib/db'
 import { listTags, resolveCategoryProductFilter } from '@/modules/shop/lib/db/catalogue'
 import { getShopConfigCached } from '@/modules/shop/lib/config'
 import { getShopBreakpoints } from '@/modules/shop/lib/breakpoints'
@@ -75,6 +75,13 @@ async function renderTaggedCards(template: PuckData | null, items: CardItem[], m
 export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridProps) {
   await connection()
   const columns = props.columns ?? 3
+  // Paging off is this block exactly as it was: fetch `limit`, render `limit`,
+  // no pager, default ceiling. Only a paged grid reaches past 100, and only
+  // because the shell now has somewhere to put the rest.
+  const paginate = props.paginate === 'more' || props.paginate === 'pages' ? props.paginate : 'none'
+  const limit = props.limit ?? 24
+  const pageSize = paginate === 'none' ? limit : Math.max(1, Math.floor(Number(props.pageSize)) || limit)
+  const fetchCount = paginate === 'none' ? limit : HARD_MAX_PER_PAGE
   const config = await getShopConfigCached()
   const categoryFilter = props.categorySlug
     ? await resolveCategoryProductFilter(props.categorySlug, config.categoryProductDisplayMode)
@@ -88,9 +95,12 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
       ...categoryFilter,
       collectionSlug: props.collectionSlug || undefined,
       tagSlug: props.tagSlug || undefined,
-      // listProducts clamps perPage to 100. Filtering happens over exactly what
-      // is rendered, so the cap is the honest ceiling of this block.
-      perPage: props.limit ?? 24,
+      // Filtering happens over exactly what is rendered, so what comes back here
+      // is the honest ceiling of this block. Unpaged that is `limit` under the
+      // default 100 clamp; paged, the whole category up to HARD_MAX_PER_PAGE
+      // with the shell showing a page at a time.
+      perPage: fetchCount,
+      maxPerPage: fetchCount,
       excludeHidden: true,
       // Whatever the shop hides for being out of stock is gone before the
       // filters ever see it, so this grid and shop's own agree about what is on
@@ -149,6 +159,9 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
         columns={columns}
         position={props.filterPosition === 'top' ? 'top' : 'left'}
         showCounts={props.showCounts !== 'no'}
+        paginate={paginate}
+        pageSize={pageSize}
+        moreLabel={props.moreLabel}
       >
         {cards}
       </AttributeFilterShell>
