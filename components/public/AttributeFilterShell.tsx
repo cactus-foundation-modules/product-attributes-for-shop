@@ -194,7 +194,15 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
   // One way to grow the window, whether a thumb or the observer asked for it.
   const growing = paginate === 'more' || paginate === 'scroll'
   const moreToShow = growing && shownLimit < matchingTotal
-  const showMore = useCallback(() => setShownLimit((n) => n + pageSize), [pageSize])
+  // Clamped, matching shop's own pager. The `moreToShow` gate below already
+  // unmounts the button and the sentinel once everything is on screen, so an
+  // unbounded counter was never actually reachable - but leaving it unbounded
+  // means the one number the observer drives has no ceiling at all, and the two
+  // implementations of the same idea disagreed. They agree now.
+  const showMore = useCallback(
+    () => setShownLimit((n) => Math.min(n + pageSize, matchingTotal)),
+    [pageSize, matchingTotal],
+  )
   const sentinelRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (paginate !== 'scroll' || !moreToShow) return
