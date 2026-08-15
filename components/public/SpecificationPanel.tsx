@@ -72,13 +72,21 @@ function readSnapshot(): VariantSelectionDetail | null {
 // YourChoicePill (its components/public/VariantParts.tsx) so the spec table and
 // the gallery stage wear the same badge - copied, not imported, because that
 // module may not be installed and '@/modules/shop-variations/...' would break
-// the build on such a site (same bargain as the selection event above). Static
-// here rather than absolute: it leads the table instead of floating over it.
+// the build on such a site (same bargain as the selection event above).
+//
+// One pill per line rather than one over the table: most of a chair's spec is
+// the same whichever one you build, and a single badge at the top claimed the
+// lot. It rides only the lines that actually changed with the options picked -
+// the rows the view marked `perVariant` - so the shopper can see at a glance
+// which numbers are theirs and which belong to the range. Inline and
+// vertical-align:middle so it flows after the value and wraps under it in a
+// narrow column instead of stretching the cell; nowrap so the badge itself is
+// never broken in half.
 const specCss = ({ tabletBp, mobileBp }: Breakpoints) => `
-.pat-spec-choice{display:inline-flex;align-items:center;gap:.375rem;margin-bottom:16px;
-  padding:5px 10px;border-radius:999px;
+.pat-spec-choice{display:inline-flex;align-items:center;gap:.3125rem;vertical-align:middle;
+  margin-left:8px;padding:3px 8px;border-radius:999px;white-space:nowrap;
   background:var(--color-primary);color:var(--color-on-primary);
-  font-size:.6875rem;font-weight:700;letter-spacing:.02em;line-height:1}
+  font-size:.625rem;font-weight:700;letter-spacing:.02em;line-height:1}
 .pat-spec-cols{columns:3;column-gap:16px}
 .pat-spec-item{break-inside:avoid;padding-bottom:16px}
 .pat-spec-group{break-inside:avoid;margin:0;border:1px solid var(--color-border);border-radius:12px;overflow:hidden}
@@ -92,6 +100,17 @@ const specCss = ({ tabletBp, mobileBp }: Breakpoints) => `
 @media (max-width:${tabletBp}){.pat-spec-cols{columns:2}}
 @media (max-width:${mobileBp}){.pat-spec-cols{columns:1}}
 `
+
+function YourChoicePill() {
+  return (
+    <span className="pat-spec-choice">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M20 6L9 17l-5-5" />
+      </svg>
+      Your choice
+    </span>
+  )
+}
 
 export function SpecificationPanel({ payload, autoSort }: { payload: unknown; autoSort?: boolean }) {
   const view = payload as PatSpecPanelPayload
@@ -131,15 +150,17 @@ export function SpecificationPanel({ payload, autoSort }: { payload: unknown; au
       weight: section.rows.length + (section.name ? 1 : 0),
       rows: section.rows
         .map((row) => {
-          if (!chosen || !row.perVariant) return { ...row }
+          if (!chosen || !row.perVariant) return { label: row.label, value: row.value, mine: false }
           const value = row.perVariant[index]
           // Null is not a gap to paper over: it means this line does not apply
           // to the chair they picked (a bespoke-only range, arms on an armless
           // chair), so the line goes rather than reading blank.
           if (value == null) return null
-          return { ...row, value }
+          // `mine` is what earns the line its badge: this value came from the
+          // chosen variation, not from the range.
+          return { label: row.label, value, mine: true }
         })
-        .filter((row): row is { label: string; value: string } => row !== null),
+        .filter((row): row is { label: string; value: string; mine: boolean } => row !== null),
     }))
     .filter((section) => section.rows.length > 0)
 
@@ -155,14 +176,6 @@ export function SpecificationPanel({ payload, autoSort }: { payload: unknown; au
     <>
       <style dangerouslySetInnerHTML={{ __html: specCss(view.breakpoints ?? DEFAULT_BREAKPOINTS) }} />
       <div className="pat-spec">
-        {chosen && (
-          <span className="pat-spec-choice">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
-            Your choice
-          </span>
-        )}
         <div className="pat-spec-cols">
           {sections.map((section) => (
             <div className="pat-spec-item" key={section.id ?? '__unsectioned'}>
@@ -173,7 +186,10 @@ export function SpecificationPanel({ payload, autoSort }: { payload: unknown; au
                     {section.rows.map((row) => (
                       <tr key={row.label}>
                         <td>{row.label}</td>
-                        <td>{row.value}</td>
+                        <td>
+                          {row.value}
+                          {row.mine && <YourChoicePill />}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
