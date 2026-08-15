@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PatAttributeWithValues } from '@/modules/product-attributes-for-shop/lib/types'
 import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
 import { matchesSelection } from '@/modules/product-attributes-for-shop/lib/filter-logic'
@@ -56,13 +56,26 @@ export function attributePageNumbers(current: number, last: number): (number | '
   return out
 }
 
+// useLayoutEffect where there is a DOM, useEffect where there is not.
+//
+// The paging pass has to land BEFORE the browser paints. A plain useEffect runs
+// after paint, so a category of 217 products drew all 217 cards and then hid 193
+// of them - a visible flash and a scrollbar that jumps under the shopper's hand.
+// useLayoutEffect runs before paint and the shopper only ever sees the page they
+// asked for.
+//
+// React warns if useLayoutEffect is called during a server render, and this
+// component IS server-rendered, so the choice is made once here rather than
+// suppressed at the call site.
+const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect
+
 export function AttributeFilterShell({ attributes, matrix, counts, columns, position, showCounts, children, paginate = 'none', pageSize = 24, moreLabel }: FilterShellProps) {
   const gridRef = useRef<HTMLDivElement>(null)
   const [selected, setSelected] = useState<Map<string, Set<string>>>(new Map())
   const [visibleCount, setVisibleCount] = useState<number | null>(null)
   // How many of the matching cards are on screen. 'more' grows this window;
   // 'pages' slides it. Both are ignored entirely when paginate is 'none'.
-  const [shown, setShown] = useState(pageSize)
+  const [shownLimit, setShownLimit] = useState(pageSize)
   const [page, setPage] = useState(1)
   // Back to the top whenever the filtered set changes, or a shopper on page 5
   // who ticks a colour that leaves four products lands on an empty grid.
@@ -73,7 +86,7 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
   const [lastResetKey, setLastResetKey] = useState(pageResetKey)
   if (pageResetKey !== lastResetKey) {
     setLastResetKey(pageResetKey)
-    setShown(pageSize)
+    setShownLimit(pageSize)
     setPage(1)
   }
 
@@ -129,7 +142,7 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
   // walk the cards in the same order, and writes the same `display` property -
   // they never disagree, because this only ever hides cards the filter pass has
   // already shown.
-  useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     if (paginate === 'none') return
     const root = gridRef.current
     if (!root) return
@@ -137,13 +150,13 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
     const matching = [...root.querySelectorAll<HTMLElement>('[data-pat-product]')]
       .filter((el) => !el.hasAttribute('data-pat-hidden'))
     const from = paginate === 'more' ? 0 : (page - 1) * size
-    const to = paginate === 'more' ? Math.max(size, shown) : from + size
+    const to = paginate === 'more' ? Math.max(size, shownLimit) : from + size
     matching.forEach((el, i) => {
       const onThisPage = i >= from && i < to
       el.style.display = onThisPage ? '' : 'none'
       el.toggleAttribute('data-pat-offpage', !onThisPage)
     })
-  }, [paginate, pageSize, page, shown, selected, matrix])
+  }, [paginate, pageSize, page, shownLimit, selected, matrix])
 
   function toggle(attributeId: string, valueId: string) {
     setSelected((prev) => {
@@ -177,8 +190,8 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
     paginate !== 'none' && matchingTotal > pageSize ? (
       <nav className="pat-pager" aria-label="Product pages">
         {paginate === 'more' ? (
-          shown < matchingTotal && (
-            <button type="button" className="pat-pager-more" onClick={() => setShown((n) => n + pageSize)}>
+          shownLimit < matchingTotal && (
+            <button type="button" className="pat-pager-more" onClick={() => setShownLimit((n) => n + pageSize)}>
               {moreLabel || 'Show more'}
             </button>
           )
