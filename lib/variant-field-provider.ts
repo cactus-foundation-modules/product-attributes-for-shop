@@ -1,6 +1,8 @@
 import {
   listVariationColumns,
+  listVariationColumnsForProducts,
   getVariantAttributeValues,
+  getVariantAttributeValuesForProducts,
   setVariantAttributeValue,
   ensureAttributeValueByLabel,
   findAttributeValueByLabel,
@@ -22,6 +24,15 @@ import type { PatVariationColumn } from '@/modules/product-attributes-for-shop/l
 // asks per variant, so a short cache spares a query per row during an import.
 const CACHE_TTL_MS = 10_000
 const columnCache = new Map<string, { cols: PatVariationColumn[]; at: number }>()
+
+// This product's columns, from a batched preload where the caller made one, else
+// the short per-product cache. A product missing from a preloaded map genuinely
+// has no variation columns - the batch covered every parent it was given - so an
+// empty list is the answer, not a reason to go and ask again.
+async function columnsForWithCtx(productId: string, ctx?: AttrImportCtx): Promise<PatVariationColumn[]> {
+  if (ctx?.columns) return ctx.columns.get(productId) ?? []
+  return columnsFor(productId)
+}
 
 async function columnsFor(productId: string): Promise<PatVariationColumn[]> {
   const hit = columnCache.get(productId)
@@ -53,6 +64,10 @@ async function columnsFor(productId: string): Promise<PatVariationColumn[]> {
 // non-empty cell writes.
 type AttrImportCtx = {
   current: Map<string, Map<string, string | null>>
+  // Every parent's variation columns, preloaded when the context covers many
+  // parents. Absent on a single-parent context, where columnsFor's own short
+  // cache is enough and one lookup is not worth a query for the whole catalogue.
+  columns?: Map<string, PatVariationColumn[]>
   labelCache: Map<string, string | null>
 }
 
@@ -100,10 +115,35 @@ export const productAttributesVariantFieldProvider = {
     return { current, labelCache: new Map() }
   },
 
+  // The batched preload: one context covering many parents, so a catalogue-wide
+  // caller pays two queries instead of two per parent. Everything it holds is
+  // keyed by child product id or parent id, both globally unique, which is what
+  // makes one shared context safe across every parent in the batch.
+  async beginImportMany(parents: Array<{ productId: string; childProductIds: string[] }>): Promise<AttrImportCtx> {
+    const productIds = parents.map((p) => p.productId)
+    const childProductIds = parents.flatMap((p) => p.childProductIds)
+    const [byChild, columns] = await Promise.all([
+      getVariantAttributeValuesForProducts(productIds, childProductIds),
+      listVariationColumnsForProducts(productIds),
+    ])
+    const current = new Map<string, Map<string, string | null>>()
+    for (const [childId, byAssignment] of Object.entries(byChild)) {
+      const assignmentMap = new Map<string, string | null>()
+      for (const [assignmentId, v] of Object.entries(byAssignment)) assignmentMap.set(assignmentId, v.valueId)
+      current.set(childId, assignmentMap)
+    }
+    return { current, columns, labelCache: new Map() }
+  },
+
   async applyImportedRow(productId: string, childProductId: string, row: Record<string, string>, ctx?: unknown) {
+    const importCtx = isAttrImportCtx(ctx) ? ctx : undefined
+    // Deliberately NOT read from a batched preload. A preloaded map answers
+    // "absent means no columns", which is true of the parents the batch covered
+    // and false of a product created part-way through an import - and on the
+    // write path that silence would drop a new product's attributes rather than
+    // merely miscount them. The read path can afford the assumption; this cannot.
     const cols = await columnsFor(productId)
     if (cols.length === 0) return
-    const importCtx = isAttrImportCtx(ctx) ? ctx : undefined
     // Match headers to attribute names case-insensitively; only columns the sheet
     // actually carries are touched, so a partial sheet leaves the rest alone.
     const rowByLower = new Map(Object.entries(row).map(([k, v]) => [k.trim().toLowerCase(), v]))
@@ -153,9 +193,9 @@ export const productAttributesVariantFieldProvider = {
   // known label without materialising an unknown one, which is the point: a
   // preview must not mutate.
   async rowChanged(productId: string, childProductId: string, row: Record<string, string>, ctx?: unknown) {
-    const cols = await columnsFor(productId)
-    if (cols.length === 0) return false
     const importCtx = isAttrImportCtx(ctx) ? ctx : undefined
+    const cols = await columnsForWithCtx(productId, importCtx)
+    if (cols.length === 0) return false
     const rowByLower = new Map(Object.entries(row).map(([k, v]) => [k.trim().toLowerCase(), v]))
     for (const col of cols) {
       const key = col.name.trim().toLowerCase()

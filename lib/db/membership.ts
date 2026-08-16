@@ -282,6 +282,79 @@ export async function listVariationColumns(productId: string): Promise<PatVariat
 // Matching is on the row's own assignment, which is what keeps two helpings of
 // one attribute apart: "Oak" on the main finish and "Oak" on the edge are two
 // rows differing in nothing else.
+// The batched twins of listVariationColumns and getVariantAttributeValues:
+// every parent's variation columns, and every child's stored values, in one query
+// each rather than one per parent.
+//
+// A caller sweeping a catalogue - the Google Sheet's check, which asks "would
+// this row change?" for every variant of every product - paid a round trip per
+// parent per provider for these. Measured across 349 variable products, this
+// module's share alone was 184 seconds, and none of it was the querying.
+export async function listVariationColumnsForProducts(
+  productIds: string[],
+): Promise<Map<string, PatVariationColumn[]>> {
+  const out = new Map<string, PatVariationColumn[]>()
+  const unique = [...new Set(productIds)].filter(Boolean)
+  if (unique.length === 0) return out
+  const rows = await prisma.$queryRaw<
+    {
+      product_id: string; assignment_id: string; attribute_id: string; name: string; position: number
+      value_id: string | null; label: string | null; swatch: string | null
+    }[]
+  >`
+    SELECT ppa."product_id", ppa."id" AS "assignment_id", a."id" AS "attribute_id",
+           COALESCE(NULLIF(TRIM(ppa."name_override"), ''), a."name") AS "name",
+           ppa."position",
+           av."id" AS "value_id", av."label", av."swatch"
+    FROM "pat_product_attributes" ppa
+    JOIN "pat_attributes" a ON a."id" = ppa."attribute_id"
+    LEFT JOIN "pat_attribute_values" av ON av."attribute_id" = a."id"
+    WHERE ppa."product_id" IN (${Prisma.join(unique)}) AND ppa."use_for_variations" = true
+    ORDER BY ppa."position" ASC, a."position" ASC, a."created_at" ASC, av."position" ASC, av."label" ASC
+  `
+  // Same shape the single-product version builds: one entry per helping, its
+  // selectable values gathered underneath it, in display order.
+  const byAssignment = new Map<string, PatVariationColumn>()
+  for (const r of rows) {
+    let col = byAssignment.get(r.assignment_id)
+    if (!col) {
+      col = { assignmentId: r.assignment_id, attributeId: r.attribute_id, name: r.name, position: r.position, values: [] }
+      byAssignment.set(r.assignment_id, col)
+      const list = out.get(r.product_id) ?? []
+      list.push(col)
+      out.set(r.product_id, list)
+    }
+    if (r.value_id && r.label !== null) col.values.push({ id: r.value_id, label: r.label, swatch: r.swatch })
+  }
+  return out
+}
+
+export async function getVariantAttributeValuesForProducts(
+  productIds: string[],
+  childProductIds: string[],
+): Promise<Record<string, Record<string, { valueId: string; label: string }>>> {
+  const result: Record<string, Record<string, { valueId: string; label: string }>> = {}
+  const parents = [...new Set(productIds)].filter(Boolean)
+  const children = [...new Set(childProductIds)].filter(Boolean)
+  if (parents.length === 0 || children.length === 0) return result
+  // Parent scoping is kept exactly as the single-product version has it. A child
+  // only ever holds values against its own parent's helpings, so it is redundant
+  // in practice - but "in practice" is not a reason to widen a query that decides
+  // what a variant is currently set to.
+  const rows = await prisma.$queryRaw<{ child_id: string; assignment_id: string; value_id: string; label: string }[]>`
+    SELECT pv."product_id" AS "child_id", ppa."id" AS "assignment_id", av."id" AS "value_id", av."label"
+    FROM "pat_product_values" pv
+    JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
+    JOIN "pat_product_attributes" ppa
+      ON ppa."id" = pv."assignment_id" AND ppa."product_id" IN (${Prisma.join(parents)}) AND ppa."use_for_variations" = true
+    WHERE pv."product_id" IN (${Prisma.join(children)})
+  `
+  for (const r of rows) {
+    ;(result[r.child_id] ??= {})[r.assignment_id] = { valueId: r.value_id, label: r.label }
+  }
+  return result
+}
+
 export async function getVariantAttributeValues(
   productId: string,
   childProductIds: string[],
