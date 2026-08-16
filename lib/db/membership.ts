@@ -198,6 +198,38 @@ export async function listProductLevelColumns(
   return rows.map((r) => ({ assignmentId: r.assignment_id, attributeId: r.attribute_id, name: r.name, position: r.position }))
 }
 
+// The same, for MANY products in one query, grouped by product and in the same
+// display order within each. A caller working over a whole catalogue - the
+// Google-Sheet check, which asks "would this row change?" for every product -
+// otherwise makes one round trip per product, and on a catalogue of a few hundred
+// that is the entire cost of the pass. Measured at 204ms per product from a
+// machine a hop away from the database: 445 products, ninety seconds, all of it
+// waiting. The provider preloads through this in beginImport.
+export async function listProductLevelColumnsForProducts(
+  productIds: string[],
+): Promise<Map<string, { assignmentId: string; attributeId: string; name: string; position: number }[]>> {
+  const map = new Map<string, { assignmentId: string; attributeId: string; name: string; position: number }[]>()
+  const unique = [...new Set(productIds)].filter(Boolean)
+  if (unique.length === 0) return map
+  const rows = await prisma.$queryRaw<
+    { product_id: string; assignment_id: string; attribute_id: string; name: string; position: number }[]
+  >`
+    SELECT ppa."product_id", ppa."id" AS "assignment_id", a."id" AS "attribute_id",
+           COALESCE(NULLIF(TRIM(ppa."name_override"), ''), a."name") AS "name",
+           ppa."position"
+    FROM "pat_product_attributes" ppa
+    JOIN "pat_attributes" a ON a."id" = ppa."attribute_id"
+    WHERE ppa."product_id" IN (${Prisma.join(unique)}) AND ppa."use_for_variations" = false
+    ORDER BY ppa."position" ASC, a."position" ASC, a."created_at" ASC
+  `
+  for (const r of rows) {
+    const list = map.get(r.product_id) ?? []
+    list.push({ assignmentId: r.assignment_id, attributeId: r.attribute_id, name: r.name, position: r.position })
+    map.set(r.product_id, list)
+  }
+  return map
+}
+
 // The product's use-for-variations helpings with their selectable values, in
 // display order - the columns the Variations tab shows and the CSV carries.
 //

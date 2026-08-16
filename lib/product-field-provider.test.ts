@@ -18,8 +18,17 @@ const setProductAssignmentValues = vi.fn(async (_p: string, _a: string, _v: stri
 const listAllAttributes = vi.fn(async (): Promise<{ id: string; name: string }[]> => [])
 const upsertProductLevelAttribute = vi.fn(async (_p: string, _a: string): Promise<string | null> => null)
 
+// The batched twin beginImport preloads through. Built from the same fixture, so
+// a product asked for in a batch gets exactly what it would have got one at a
+// time - which is the property that matters: preloading must not change any
+// answer, only how many round trips it took to get them.
+const listProductLevelColumnsForProducts = vi.fn(async (ids: string[]) =>
+  new Map(await Promise.all(ids.map(async (id) => [id, await listProductLevelColumns(id)] as const))),
+)
+
 vi.mock('@/modules/product-attributes-for-shop/lib/db/membership', () => ({
   listProductLevelColumns: (...a: unknown[]) => listProductLevelColumns(...(a as [string])),
+  listProductLevelColumnsForProducts: (...a: unknown[]) => listProductLevelColumnsForProducts(...(a as [string[]])),
   ensureAttributeValueByLabel: (...a: unknown[]) => ensureAttributeValueByLabel(...(a as [string, string])),
   findAttributeValueByLabel: (...a: unknown[]) => findAttributeValueByLabel(...(a as [string, string])),
   listAllAttributes: (...a: unknown[]) => listAllAttributes(...(a as [])),

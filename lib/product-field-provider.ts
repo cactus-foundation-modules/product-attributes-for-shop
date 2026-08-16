@@ -1,5 +1,6 @@
 import {
   listProductLevelColumns,
+  listProductLevelColumnsForProducts,
   ensureAttributeValueByLabel,
   findAttributeValueByLabel,
   listAllAttributes,
@@ -31,6 +32,18 @@ type PatProductLevelColumn = { assignmentId: string; attributeId: string; name: 
 // asks per product, so a short cache spares a query per product during a Pull.
 const CACHE_TTL_MS = 10_000
 const columnCache = new Map<string, { cols: PatProductLevelColumn[]; at: number }>()
+
+// The preloaded columns for this product, or a query when there is no context to
+// read them from (a caller with no beginImport, e.g. the sheet's Push building
+// its header). A product absent from a preloaded map genuinely has no columns -
+// the batch covered every id it was given - so an empty list is the right answer
+// rather than a reason to go and ask again.
+async function columnsForWithCtx(productId: string, ctx?: ProdImportCtx): Promise<PatProductLevelColumn[]> {
+  // `ctx.columns` is only absent on a context built before this preload existed;
+  // the type guard cannot see the difference, so fall back rather than throw.
+  if (ctx?.columns) return ctx.columns.get(productId) ?? []
+  return columnsFor(productId)
+}
 
 async function columnsFor(productId: string): Promise<PatProductLevelColumn[]> {
   const hit = columnCache.get(productId)
@@ -87,6 +100,10 @@ function sameSet(a: Set<string>, b: Set<string>): boolean {
 // (created mid-import) reads as having no ticks yet, so its first values write.
 type ProdImportCtx = {
   current: Map<string, Map<string, Set<string>>>
+  // Every product's columns, preloaded in one query. Asking per product is a
+  // round trip per product, which on a catalogue-wide pass is the whole cost of
+  // the pass - see listProductLevelColumnsForProducts.
+  columns: Map<string, PatProductLevelColumn[]>
   labelCache: Map<string, string | null>
   // Attributes auto-attached at product level during this import, attribute id ->
   // the assignment id it got. Keeps the upsert to once per attribute per product
@@ -122,14 +139,17 @@ export const productAttributesProductFieldProvider = {
 
   // Preload every product's current product-level ticks in one query.
   async beginImport(productIds: string[]): Promise<ProdImportCtx> {
-    const byProduct = await getProductOwnValueIdsByAssignment(productIds)
+    const [byProduct, columns] = await Promise.all([
+      getProductOwnValueIdsByAssignment(productIds),
+      listProductLevelColumnsForProducts(productIds),
+    ])
     const current = new Map<string, Map<string, Set<string>>>()
     for (const [productId, byAssignment] of Object.entries(byProduct)) {
       const assignmentMap = new Map<string, Set<string>>()
       for (const [assignmentId, valueIds] of Object.entries(byAssignment)) assignmentMap.set(assignmentId, new Set(valueIds))
       current.set(productId, assignmentMap)
     }
-    return { current, labelCache: new Map(), assigned: new Map() }
+    return { current, columns, labelCache: new Map(), assigned: new Map() }
   },
 
   async applyImportedRow(productId: string, row: Record<string, string>, ctx?: unknown): Promise<boolean> {
@@ -218,8 +238,8 @@ export const productAttributesProductFieldProvider = {
   // label the vocabulary has not seen yet has no id here but apply would create and
   // tick it, so it always counts as a change.
   async rowChanged(productId: string, row: Record<string, string>, ctx?: unknown): Promise<boolean> {
-    const cols = await columnsFor(productId)
     const importCtx = isProdImportCtx(ctx) ? ctx : undefined
+    const cols = await columnsForWithCtx(productId, importCtx)
     const rowByLower = new Map(Object.entries(row).map(([k, v]) => [k.trim().toLowerCase(), v]))
     for (const col of cols) {
       const key = col.name.trim().toLowerCase()
