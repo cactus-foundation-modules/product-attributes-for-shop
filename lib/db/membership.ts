@@ -165,6 +165,44 @@ export async function upsertProductLevelAttribute(
   return existing[0]?.id ?? null
 }
 
+// Get-or-make a VARIATION (use-for-variations) helping for an attribute, for the
+// Variations-tab attach marker: a heading written "Shipping *" with a value under
+// it attaches that attribute to the product as a variation column. The exact twin
+// of upsertProductLevelAttribute above, and for exactly the same reason - it must
+// never flip an existing helping's use_for_variations.
+//
+// That flip is what took auto-attach away the first time round. The old code
+// upserted with DO UPDATE SET use_for_variations = true, so a heading naming an
+// attribute the owner had set up as ordinary product information turned it into a
+// per-variant column on the spot, across twenty-odd live products. So: try to
+// create an un-named variation helping, DO NOTHING on conflict, and otherwise
+// reuse only a helping that is ALREADY use-for-variations. When the un-named slot
+// is held by a product-level helping, hand back null and leave the product alone -
+// carrying one attribute both ways is a decision for the Attributes tab.
+export async function upsertVariationAttribute(
+  productId: string,
+  attributeId: string,
+): Promise<string | null> {
+  const inserted = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "pat_product_attributes"
+      ("product_id", "attribute_id", "name_override", "use_for_variations", "show_in_filters")
+    SELECT ${productId}, a."id", ${null}, true, false
+    FROM "pat_attributes" a WHERE a."id" = ${attributeId}
+    ON CONFLICT ("product_id", "attribute_id", "name_override") DO NOTHING
+    RETURNING "id"
+  `
+  if (inserted[0]) return inserted[0].id
+  // Conflict (the un-named slot is taken) or no such attribute. Reuse a helping
+  // only when it is already a variation one; a product-level helping is left
+  // exactly as the owner set it up.
+  const existing = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "pat_product_attributes"
+    WHERE "product_id" = ${productId} AND "attribute_id" = ${attributeId} AND "use_for_variations" = true
+    ORDER BY "position" ASC LIMIT 1
+  `
+  return existing[0]?.id ?? null
+}
+
 // Every attribute's id and name, for matching a sheet column heading back to the
 // attribute it names. Used by the Variations import to let a value typed into a
 // column for an attribute a product does not yet use auto-attach that attribute
