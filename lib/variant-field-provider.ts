@@ -7,6 +7,7 @@ import {
   ensureAttributeValueByLabel,
   findAttributeValueByLabel,
   listAllAttributes,
+  listVariationAttachBlocks,
   upsertVariationAttribute,
 } from '@/modules/product-attributes-for-shop/lib/db/membership'
 import { ProductAttributesVariantCell } from '@/modules/product-attributes-for-shop/components/admin/ProductAttributesVariantCell'
@@ -44,41 +45,44 @@ async function columnsFor(productId: string): Promise<PatVariationColumn[]> {
   return cols
 }
 
-// A plain heading only ever fills a column the product ALREADY has, and never
-// flips one the owner set up as ordinary product information into a per-variation
-// column. A MARKED heading - the attribute's name with a star after it, "Shipping
-// *" - asks for that attribute to be attached to this product as a new variation
-// column, so an attribute can be put onto a product straight from the sheet.
+// A column heading naming an attribute the product does not use yet ATTACHES that
+// attribute to the product as a variation column and sets each variant's value -
+// so an attribute can be put on a product straight from the sheet, with no
+// ceremony beyond typing its name at the top of a column.
 //
-// The marker exists because the first version of this had none. Any heading
-// naming an existing attribute - "Range", "Catalog", "Commodity Code" - attached
-// that attribute on the first non-empty cell, and `upsertProductAttribute` flipped
-// an existing product-level helping to use-for-variations along the way. The new
-// column went straight back out into the sheet header on the next export, so the
-// following Pull re-asserted it: deleting it in the admin never stuck, and a live
-// catalogue ended up with spec fields standing as per-variant columns on twenty-odd
-// products.
+// This is the third go at it, and the two ways it went wrong before are each shut
+// off by their own mechanism rather than by making the owner ask twice:
 //
-// Both of those are shut off here, separately:
-//   - the marker is CONSUMED. Once the attribute is attached, the column comes out
-//     of the database as plain "Shipping", and the Google-Sheet mirror writes that
-//     over the marked heading on the next Push. A plain heading attaches nothing,
-//     so removing the column on the Attributes tab stays removed.
-//   - `upsertVariationAttribute` never hijacks a product-level helping. Where the
-//     owner already uses the attribute as product information, the marked heading
-//     is declined and the product left alone.
-const ATTACH_MARKER = /^(.*?)\s*\*\s*$/
+//   1. IT USED TO RE-ASSERT ITSELF. An attached column goes straight back into the
+//      sheet on the next Push, so removing it on the product's Attributes tab
+//      lasted until the next Pull put it back - a column that could not be
+//      deleted. Now the removal is REMEMBERED: `setProductAttributes` records the
+//      (product, attribute) pair in `pat_variation_attach_blocks`, and
+//      `upsertVariationAttribute` refuses a blocked pair in the INSERT itself. The
+//      sheet proposes, the owner disposes, and putting the attribute back by hand
+//      clears the block. See migrations/011.
+//
+//   2. IT USED TO HIJACK A PRODUCT-LEVEL HELPING. `upsertProductAttribute` flipped
+//      an existing helping to use-for-variations, which is how a live catalogue
+//      ended up with spec fields standing as per-variant columns on twenty-odd
+//      products. `upsertVariationAttribute` creates its own helping or declines;
+//      it never flips one.
+//
+// What is left is genuinely reversible, which is the whole difference: an attach
+// nobody wanted is one deletion away from being gone for good.
+//
+// A trailing star on the heading ("Shipping *") is tolerated and ignored - an
+// earlier version of this asked for one, and a sheet still carrying them should
+// not quietly stop working. The Google-Sheet mirror clears it on the next Push.
+const TOLERATED_MARKER = /\s*\*\s*$/
 
-// The bare attribute name a marked heading asks for, or null when the heading
-// carries no marker. A star rather than a leading plus: Sheets reads a cell
-// beginning "+" as a formula and leaves #NAME? sitting in the header.
-function attachMarkerName(header: string): string | null {
-  const name = ATTACH_MARKER.exec(header.trim())?.[1]?.trim()
-  return name ? name : null
+// The attribute name a heading names, with any tolerated marker taken off.
+function attachHeaderName(header: string): string {
+  return header.trim().replace(TOLERATED_MARKER, '').trim()
 }
 
 // Headings on the Variations tab that belong to shop-variations or another module,
-// never to an attribute. A marked heading matching one of these is refused, so an
+// never to an attribute. A heading matching one of these is refused, so an
 // attribute the owner happens to have named "Supplier" can never hijack the real
 // Supplier column. Option/Value pairs are matched by pattern, not listed.
 const RESERVED_VARIATION_HEADERS: ReadonlySet<string> = new Set([
@@ -119,10 +123,16 @@ type AttrImportCtx = {
   // context now covers many parents (see beginImportMany), and an attribute-only
   // key would hand parent B the helping that was created for parent A.
   attached: Map<string, string>
+  // "productId|attributeId" for every pair the owner has taken off by hand,
+  // preloaded so the read-only twin can decline them without a query per row.
+  // The WRITE path does not lean on this - `upsertVariationAttribute` re-checks
+  // in SQL, which is what makes a product created mid-import safe.
+  blocks: Set<string>
 }
 
 function isAttrImportCtx(ctx: unknown): ctx is AttrImportCtx {
   return !!ctx && typeof ctx === 'object' && 'current' in ctx && 'labelCache' in ctx && 'attached' in ctx
+    && 'blocks' in ctx
 }
 
 // The current value id for a (child, helping), from the preloaded context. A
@@ -240,14 +250,17 @@ export const productAttributesVariantFieldProvider = {
   // Preload every child's current variation-attribute value for this parent in one
   // query, so applyImportedRow diffs in memory instead of writing blind per row.
   async beginImport(productId: string, childProductIds: string[]): Promise<AttrImportCtx> {
-    const byChild = await getVariantAttributeValues(productId, childProductIds)
+    const [byChild, blocks] = await Promise.all([
+      getVariantAttributeValues(productId, childProductIds),
+      listVariationAttachBlocks([productId]),
+    ])
     const current = new Map<string, Map<string, string | null>>()
     for (const [childId, byAssignment] of Object.entries(byChild)) {
       const assignmentMap = new Map<string, string | null>()
       for (const [assignmentId, v] of Object.entries(byAssignment)) assignmentMap.set(assignmentId, v.valueId)
       current.set(childId, assignmentMap)
     }
-    return { current, labelCache: new Map(), attached: new Map() }
+    return { current, labelCache: new Map(), attached: new Map(), blocks }
   },
 
   // The batched preload: one context covering many parents, so a catalogue-wide
@@ -257,9 +270,10 @@ export const productAttributesVariantFieldProvider = {
   async beginImportMany(parents: Array<{ productId: string; childProductIds: string[] }>): Promise<AttrImportCtx> {
     const productIds = parents.map((p) => p.productId)
     const childProductIds = parents.flatMap((p) => p.childProductIds)
-    const [byChild, columns] = await Promise.all([
+    const [byChild, columns, blocks] = await Promise.all([
       getVariantAttributeValuesForProducts(productIds, childProductIds),
       listVariationColumnsForProducts(productIds),
+      listVariationAttachBlocks(productIds),
     ])
     const current = new Map<string, Map<string, string | null>>()
     for (const [childId, byAssignment] of Object.entries(byChild)) {
@@ -267,7 +281,7 @@ export const productAttributesVariantFieldProvider = {
       for (const [assignmentId, v] of Object.entries(byAssignment)) assignmentMap.set(assignmentId, v.valueId)
       current.set(childId, assignmentMap)
     }
-    return { current, columns, labelCache: new Map(), attached: new Map() }
+    return { current, columns, labelCache: new Map(), attached: new Map(), blocks }
   },
 
   async applyImportedRow(productId: string, childProductId: string, row: Record<string, string>, ctx?: unknown) {
@@ -287,34 +301,33 @@ export const productAttributesVariantFieldProvider = {
       await applyCellValue(col.attributeId, col.assignmentId, (rowByLower.get(key) ?? '').trim(), childProductId, importCtx)
     }
 
-    // Attach. A MARKED heading - "Shipping *" - naming an attribute this product
-    // does not use for variations yet attaches that attribute to the product as a
-    // variation column and sets the value. Only a marked heading acts, only one
-    // naming an attribute that already exists, and never off a blank cell: an
-    // unknown or unmarked heading is somebody else's - another module's field, or
-    // one of the owner's own - and is left exactly as it is.
+    // Attach. A heading naming an attribute this product does not use for
+    // variations yet attaches that attribute to the product as a variation column
+    // and sets the value. Only a heading naming an attribute that already exists
+    // acts, and never off a blank cell: an unknown heading is somebody else's -
+    // another module's field, or one of the owner's own - and is left as it is.
     const colsByName = new Map(cols.map((c) => [c.name.trim().toLowerCase(), c]))
     let attrByName: Map<string, { id: string; name: string }> | null = null
     for (const [rawKey, rawVal] of Object.entries(row)) {
-      const marked = attachMarkerName(rawKey)
-      if (!marked) continue
-      const key = marked.toLowerCase()
+      const name = attachHeaderName(rawKey)
+      if (!name) continue
+      const key = name.toLowerCase()
       if (RESERVED_VARIATION_HEADERS.has(key) || OPTION_PAIR_HEADER.test(key)) continue
+      // Already one of this product's columns - the loop above has just filled it.
+      if (colsByName.has(key)) continue
       const cellValue = (rawVal ?? '').trim()
       if (!cellValue) continue
       attrByName ??= await attributesByName()
       const attr = attrByName.get(key)
       if (!attr) continue
 
-      // The product may already have this column: the marker outlives the Pull
-      // that consumed it until the next Push writes the plain heading over it, so
-      // two Pulls in a row both see a star. Fill the column that exists rather
-      // than standing up a second one.
-      let assignmentId = colsByName.get(key)?.assignmentId ?? importCtx?.attached.get(`${productId}|${attr.id}`)
+      let assignmentId = importCtx?.attached.get(`${productId}|${attr.id}`)
       if (!assignmentId) {
         const made = await upsertVariationAttribute(productId, attr.id)
-        // null: the un-named helping for this attribute is the owner's
-        // product-level one, and is never hijacked. The product is left alone.
+        // null means one of two refusals, both deliberate: the owner has taken
+        // this attribute off this product by hand (so the heading does not get to
+        // put it back), or the un-named helping for it is their product-level one
+        // and is never hijacked. Either way the product is left alone.
         if (!made) continue
         assignmentId = made
         importCtx?.attached.set(`${productId}|${attr.id}`, assignmentId)
@@ -341,23 +354,26 @@ export const productAttributesVariantFieldProvider = {
     }
 
     // Attach detection, read-only twin of the block in applyImportedRow. A
-    // non-empty value under a marked heading naming an existing attribute either
-    // attaches that attribute (nothing stored against it, so a change) or fills a
-    // column the product already has (compared like any other). An unmarked or
-    // unknown heading changes nothing, so it can never make a row count as changed.
+    // non-empty value under a heading naming an existing attribute the product
+    // does not carry would attach it, so nothing is stored against it and it
+    // counts as a change - UNLESS the owner has blocked that pair, in which case
+    // applying the row would do nothing and neither does this. An unknown heading
+    // changes nothing, so it can never make a row count as changed.
     const colsByName = new Map(cols.map((c) => [c.name.trim().toLowerCase(), c]))
     let attrByName: Map<string, { id: string; name: string }> | null = null
     for (const [rawKey, rawVal] of Object.entries(row)) {
-      const marked = attachMarkerName(rawKey)
-      if (!marked) continue
-      const key = marked.toLowerCase()
+      const name = attachHeaderName(rawKey)
+      if (!name) continue
+      const key = name.toLowerCase()
       if (RESERVED_VARIATION_HEADERS.has(key) || OPTION_PAIR_HEADER.test(key)) continue
+      if (colsByName.has(key)) continue // already compared by the loop above
       const cellValue = (rawVal ?? '').trim()
       if (!cellValue) continue
       attrByName ??= await attributesByName()
       const attr = attrByName.get(key)
       if (!attr) continue
-      if (await cellChanged(attr.id, colsByName.get(key)?.assignmentId ?? null, cellValue, childProductId, importCtx)) return true
+      if (importCtx?.blocks.has(`${productId}|${attr.id}`)) continue
+      if (await cellChanged(attr.id, null, cellValue, childProductId, importCtx)) return true
     }
     return false
   },

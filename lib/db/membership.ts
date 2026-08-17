@@ -61,12 +61,29 @@ export type PatProductAttributeInput = {
  * Helpings the owner kept are updated in place rather than deleted and re-made:
  * their id is what the value rows hang off, and recreating it would cascade
  * every tick away mid-save.
+ *
+ * This is also where the sheet's attach blocks are kept honest. An attribute the
+ * owner USED to have as a variation column and no longer does is recorded in
+ * `pat_variation_attach_blocks`, so a plain heading naming it cannot put it back
+ * on the next Pull; an attribute they have just added as one clears its block,
+ * because that is the owner saying yes rather than the sheet saying it for them.
+ * Both writes are inside the same transaction as the save itself - a block that
+ * outlived a rolled-back save would silently refuse an attach for ever after.
  */
 export async function setProductAttributes(
   productId: string,
   rows: PatProductAttributeInput[],
 ): Promise<string[]> {
   return prisma.$transaction(async (tx) => {
+    // What the product carries BEFORE the save, so the two sets can be compared
+    // once the writes are done.
+    const before = await tx.$queryRaw<{ attribute_id: string }[]>`
+      SELECT DISTINCT "attribute_id" FROM "pat_product_attributes"
+      WHERE "product_id" = ${productId} AND "use_for_variations" = true
+    `
+    const variationBefore = new Set(before.map((r) => r.attribute_id))
+    const variationAfter = new Set(rows.filter((r) => r.useForVariations).map((r) => r.attributeId))
+
     const keptIds = rows.map((r) => r.id).filter((id): id is string => !!id)
     if (keptIds.length > 0) {
       await tx.$executeRaw`
@@ -105,8 +122,52 @@ export async function setProductAttributes(
       `
       ids.push(created[0]?.id ?? '')
     }
+
+    // Removed from variations: block it. Added to variations: unblock it.
+    // Anything in neither set is untouched, so an attribute the owner has never
+    // had as a variation column keeps whatever block it already carried.
+    const removed = [...variationBefore].filter((id) => !variationAfter.has(id))
+    const added = [...variationAfter].filter((id) => !variationBefore.has(id))
+    if (removed.length > 0) {
+      await tx.$executeRaw`
+        INSERT INTO "pat_variation_attach_blocks" ("product_id", "attribute_id")
+        SELECT ${productId}, a."id" FROM "pat_attributes" a
+        WHERE a."id" IN (${Prisma.join(removed)})
+        ON CONFLICT ("product_id", "attribute_id") DO NOTHING
+      `
+    }
+    if (added.length > 0) {
+      await tx.$executeRaw`
+        DELETE FROM "pat_variation_attach_blocks"
+        WHERE "product_id" = ${productId} AND "attribute_id" IN (${Prisma.join(added)})
+      `
+    }
     return ids
   })
+}
+
+// Is this attribute blocked from being attached to this product by a column
+// heading? True once the owner has taken it off the product's variations by
+// hand, until they put it back the same way.
+export async function isVariationAttachBlocked(productId: string, attributeId: string): Promise<boolean> {
+  const rows = await prisma.$queryRaw<{ one: number }[]>`
+    SELECT 1 AS one FROM "pat_variation_attach_blocks"
+    WHERE "product_id" = ${productId} AND "attribute_id" = ${attributeId}
+    LIMIT 1
+  `
+  return rows.length > 0
+}
+
+// Every blocked (product, attribute) pair among the ones asked about, as
+// "productId|attributeId" keys. The batched form, so an import that walks a
+// whole catalogue asks once rather than once per row.
+export async function listVariationAttachBlocks(productIds: string[]): Promise<Set<string>> {
+  if (productIds.length === 0) return new Set()
+  const rows = await prisma.$queryRaw<{ product_id: string; attribute_id: string }[]>`
+    SELECT "product_id", "attribute_id" FROM "pat_variation_attach_blocks"
+    WHERE "product_id" IN (${Prisma.join(productIds)})
+  `
+  return new Set(rows.map((r) => `${r.product_id}|${r.attribute_id}`))
 }
 
 // Upserts a single membership row without disturbing the rest of the set, and
@@ -166,10 +227,10 @@ export async function upsertProductLevelAttribute(
 }
 
 // Get-or-make a VARIATION (use-for-variations) helping for an attribute, for the
-// Variations-tab attach marker: a heading written "Shipping *" with a value under
-// it attaches that attribute to the product as a variation column. The exact twin
-// of upsertProductLevelAttribute above, and for exactly the same reason - it must
-// never flip an existing helping's use_for_variations.
+// Variations-tab auto-attach: a column headed with an attribute's name, with
+// values under it, attaches that attribute to the product as a variation column.
+// The exact twin of upsertProductLevelAttribute above, and for exactly the same
+// reason - it must never flip an existing helping's use_for_variations.
 //
 // That flip is what took auto-attach away the first time round. The old code
 // upserted with DO UPDATE SET use_for_variations = true, so a heading naming an
@@ -183,11 +244,19 @@ export async function upsertVariationAttribute(
   productId: string,
   attributeId: string,
 ): Promise<string | null> {
+  // The owner has taken this attribute off this product before, so a column
+  // heading does not get to put it back. Checked in the INSERT itself rather
+  // than beforehand, so a save removing it cannot slip between the two.
   const inserted = await prisma.$queryRaw<{ id: string }[]>`
     INSERT INTO "pat_product_attributes"
       ("product_id", "attribute_id", "name_override", "use_for_variations", "show_in_filters")
     SELECT ${productId}, a."id", ${null}, true, false
-    FROM "pat_attributes" a WHERE a."id" = ${attributeId}
+    FROM "pat_attributes" a
+    WHERE a."id" = ${attributeId}
+      AND NOT EXISTS (
+        SELECT 1 FROM "pat_variation_attach_blocks" b
+        WHERE b."product_id" = ${productId} AND b."attribute_id" = ${attributeId}
+      )
     ON CONFLICT ("product_id", "attribute_id", "name_override") DO NOTHING
     RETURNING "id"
   `

@@ -39,6 +39,8 @@ const listAllAttributes = vi.fn(async (): Promise<{ id: string; name: string }[]
 const upsertVariationAttribute = vi.fn(
   async (_p: string, attributeId: string): Promise<string | null> => `asg-${attributeId}`,
 )
+// Pairs the owner has taken off by hand. Empty unless a test says otherwise.
+const listVariationAttachBlocks = vi.fn(async (_ids: string[]): Promise<Set<string>> => new Set())
 
 vi.mock('@/modules/product-attributes-for-shop/lib/db/membership', () => ({
   listVariationColumns: (...a: unknown[]) => listVariationColumns(...(a as [string])),
@@ -48,6 +50,7 @@ vi.mock('@/modules/product-attributes-for-shop/lib/db/membership', () => ({
   findAttributeValueByLabel: (...a: unknown[]) => findAttributeValueByLabel(...(a as [string, string])),
   listAllAttributes: (...a: unknown[]) => listAllAttributes(...(a as [])),
   upsertVariationAttribute: (...a: unknown[]) => upsertVariationAttribute(...(a as [string, string])),
+  listVariationAttachBlocks: (...a: unknown[]) => listVariationAttachBlocks(...(a as [string[]])),
 }))
 
 import { productAttributesVariantFieldProvider as provider } from '@/modules/product-attributes-for-shop/lib/variant-field-provider'
@@ -64,6 +67,7 @@ beforeEach(() => {
   findAttributeValueByLabel.mockClear()
   listAllAttributes.mockClear()
   upsertVariationAttribute.mockClear()
+  listVariationAttachBlocks.mockClear()
 })
 
 describe('productAttributesVariantFieldProvider import batching', () => {
@@ -269,33 +273,74 @@ describe('an attribute used for variations more than once', () => {
   })
 })
 
-// An import fills the columns a product already has, and attaches only where a
-// heading carries the marker (see below). A PLAIN heading that names an attribute
-// the product does not use for variations is somebody else's column - it must not
-// attach that attribute, and must not turn one the owner set up as ordinary
-// product information into a per-variation one.
+
+// An import fills the columns a product already has, and ATTACHES an attribute a
+// heading names that the product does not carry yet - no marker, no ceremony.
 //
-// This is also what stops an attach re-asserting itself: the Push writes the
-// attached column back under its plain name, so the next Pull reads a plain
-// heading, and a column deleted on the Attributes tab STAYS deleted.
-describe('a plain heading the product has no column for', () => {
-  it('attaches nothing and writes nothing, even when it names a real attribute', async () => {
+// What makes that safe rather than the trap it was in v0.1.35 is that it is
+// reversible: taking the column off on the Attributes tab records a block, and no
+// heading ever puts a blocked pair back. The refusal itself lives in SQL
+// (`upsertVariationAttribute`), which is why these tests drive it through the
+// mock's null return rather than asserting on a query.
+describe('a heading naming an attribute the product does not carry', () => {
+  it('attaches the attribute and writes the value', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { 'Catalog': 'Seating' }, ctx)
-    expect(upsertVariationAttribute).not.toHaveBeenCalled()
-    expect(setVariantAttributeValue).not.toHaveBeenCalled()
-    // It does not even need to know what the vocabulary holds any more.
-    expect(listAllAttributes).not.toHaveBeenCalled()
+    await provider.applyImportedRow(parent, 'c1', { 'Shipping': 'Flat pack' }, ctx)
+    expect(upsertVariationAttribute).toHaveBeenCalledTimes(1)
+    expect(upsertVariationAttribute).toHaveBeenCalledWith(parent, 'attr-shipping')
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg-attr-shipping', 'v-flat pack')
   })
 
-  it('rowChanged does not count it as a change', async () => {
+  it('works on a product with no variation columns at all', async () => {
+    listVariationColumns.mockResolvedValueOnce([])
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    expect(await provider.rowChanged!(parent, 'c1', { 'Catalog': 'Seating' }, ctx)).toBe(false)
-    expect(upsertVariationAttribute).not.toHaveBeenCalled()
+    await provider.applyImportedRow(parent, 'c1', { 'Shipping': 'Pallet' }, ctx)
+    expect(upsertVariationAttribute).toHaveBeenCalledWith(parent, 'attr-shipping')
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg-attr-shipping', 'v-pallet')
+  })
+
+  it('attaches once across many rows, not once per row', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1', 'c2'])
+    await provider.applyImportedRow(parent, 'c1', { 'Shipping': 'Pallet' }, ctx)
+    await provider.applyImportedRow(parent, 'c2', { 'Shipping': 'Pallet' }, ctx)
+    expect(upsertVariationAttribute).toHaveBeenCalledTimes(1)
+    expect(setVariantAttributeValue).toHaveBeenCalledTimes(2)
+  })
+
+  it('attaches several attributes off one row', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    await provider.applyImportedRow(parent, 'c1', { 'Shipping': 'Pallet', 'Catalog': 'Seating' }, ctx)
+    expect(upsertVariationAttribute).toHaveBeenCalledTimes(2)
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg-attr-shipping', 'v-pallet')
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg-attr-catalog', 'v-seating')
+  })
+
+  it('still fills the columns the product does have alongside attaching a new one', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    await provider.applyImportedRow(parent, 'c1', { 'Main finish': 'Oak', 'Shipping': 'Pallet' }, ctx)
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg1', 'v-oak')
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg-attr-shipping', 'v-pallet')
+    expect(upsertVariationAttribute).toHaveBeenCalledTimes(1) // only the new one
+  })
+
+  // The refusal that the whole rebuild turns on: the owner already uses this
+  // attribute as ordinary product information, so its un-named helping is theirs.
+  it('leaves the product alone when the helping is the owner\'s product-level one', async () => {
+    upsertVariationAttribute.mockResolvedValueOnce(null)
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    await provider.applyImportedRow(parent, 'c1', { 'Shipping': 'Pallet' }, ctx)
     expect(setVariantAttributeValue).not.toHaveBeenCalled()
   })
 
@@ -304,8 +349,8 @@ describe('a plain heading the product has no column for', () => {
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
     // "Supplier" is a real attribute in the vocabulary here, and also
-    // shop-variations' own column. Either way it is not this product's.
-    await provider.applyImportedRow(parent, 'c1', { 'Supplier': 'Acme' }, ctx)
+    // shop-variations' own column. The sheet's own columns always win.
+    await provider.applyImportedRow(parent, 'c1', { 'Supplier': 'Acme', 'Option 1': 'Colour' }, ctx)
     expect(upsertVariationAttribute).not.toHaveBeenCalled()
     expect(setVariantAttributeValue).not.toHaveBeenCalled()
   })
@@ -319,33 +364,18 @@ describe('a plain heading the product has no column for', () => {
     expect(setVariantAttributeValue).not.toHaveBeenCalled()
   })
 
-  it('still fills the columns the product does have, alongside one it does not', async () => {
+  it('does nothing on a blank cell - an empty column attaches nothing', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { 'Main finish': 'Oak', 'Catalog': 'Seating' }, ctx)
-    expect(setVariantAttributeValue).toHaveBeenCalledTimes(1)
-    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg1', 'v-oak')
+    await provider.applyImportedRow(parent, 'c1', { 'Shipping': '   ' }, ctx)
     expect(upsertVariationAttribute).not.toHaveBeenCalled()
-  })
-})
-
-// A heading with a star after it - "Shipping *" - asks for that attribute to be
-// attached to the product as a variation column. Written by hand by the owner,
-// read once, and gone on the next Push.
-describe('a marked heading (attach marker)', () => {
-  it('attaches the attribute and writes the value', async () => {
-    getVariantAttributeValues.mockResolvedValueOnce({})
-    const parent = nextParent()
-    const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { 'Shipping *': 'Flat pack' }, ctx)
-    expect(upsertVariationAttribute).toHaveBeenCalledTimes(1)
-    expect(upsertVariationAttribute).toHaveBeenCalledWith(parent, 'attr-shipping')
-    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg-attr-shipping', 'v-flat pack')
+    expect(setVariantAttributeValue).not.toHaveBeenCalled()
   })
 
-  it('works on a product with no variation columns at all', async () => {
-    listVariationColumns.mockResolvedValueOnce([])
+  // v0.1.58 asked for a star. A sheet still carrying one must not quietly stop
+  // working while it waits for the Push that clears it.
+  it('tolerates a heading still carrying the old star', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
@@ -354,100 +384,71 @@ describe('a marked heading (attach marker)', () => {
     expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg-attr-shipping', 'v-pallet')
   })
 
-  it('attaches once across many rows, not once per row', async () => {
-    getVariantAttributeValues.mockResolvedValueOnce({})
-    const parent = nextParent()
-    const ctx = await provider.beginImport!(parent, ['c1', 'c2'])
-    await provider.applyImportedRow(parent, 'c1', { 'Shipping *': 'Pallet' }, ctx)
-    await provider.applyImportedRow(parent, 'c2', { 'Shipping *': 'Pallet' }, ctx)
-    expect(upsertVariationAttribute).toHaveBeenCalledTimes(1)
-    expect(setVariantAttributeValue).toHaveBeenCalledTimes(2)
-  })
-
-  // Two Pulls before the Push that clears the star. The column is already there.
-  it('fills an existing column rather than standing up a second one', async () => {
-    listVariationColumns.mockResolvedValueOnce([
-      { assignmentId: 'asg-ship', attributeId: 'attr-shipping', name: 'Shipping', position: 0, values: [] },
-    ])
-    getVariantAttributeValues.mockResolvedValueOnce({})
-    const parent = nextParent()
-    const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { 'Shipping *': 'Pallet' }, ctx)
-    expect(upsertVariationAttribute).not.toHaveBeenCalled()
-    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg-ship', 'v-pallet')
-  })
-
-  // The refusal that the whole rebuild turns on: the owner already uses this
-  // attribute as ordinary product information, so its un-named helping is theirs.
-  // Nothing is hijacked and nothing is written.
-  it('leaves the product alone when the helping is the owner\'s product-level one', async () => {
-    upsertVariationAttribute.mockResolvedValueOnce(null)
-    getVariantAttributeValues.mockResolvedValueOnce({})
-    const parent = nextParent()
-    const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { 'Shipping *': 'Pallet' }, ctx)
-    expect(setVariantAttributeValue).not.toHaveBeenCalled()
-  })
-
-  it('refuses a marked heading naming one of shop-variations\' own columns', async () => {
-    getVariantAttributeValues.mockResolvedValueOnce({})
-    const parent = nextParent()
-    const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { 'Supplier *': 'Acme', 'Option 1 *': 'Colour' }, ctx)
-    expect(upsertVariationAttribute).not.toHaveBeenCalled()
-    expect(setVariantAttributeValue).not.toHaveBeenCalled()
-  })
-
-  it('does nothing for a marked heading naming no attribute that exists', async () => {
-    getVariantAttributeValues.mockResolvedValueOnce({})
-    const parent = nextParent()
-    const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { 'Made Up *': 'x' }, ctx)
-    expect(upsertVariationAttribute).not.toHaveBeenCalled()
-    expect(setVariantAttributeValue).not.toHaveBeenCalled()
-  })
-
-  it('does nothing on a blank cell - a marker alone attaches nothing', async () => {
-    getVariantAttributeValues.mockResolvedValueOnce({})
-    const parent = nextParent()
-    const ctx = await provider.beginImport!(parent, ['c1'])
-    await provider.applyImportedRow(parent, 'c1', { 'Shipping *': '   ' }, ctx)
-    expect(upsertVariationAttribute).not.toHaveBeenCalled()
-    expect(setVariantAttributeValue).not.toHaveBeenCalled()
-  })
-
   it('rowChanged counts an attach as a change, and attaches nothing itself', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    expect(await provider.rowChanged!(parent, 'c1', { 'Shipping *': 'Pallet' }, ctx)).toBe(true)
+    expect(await provider.rowChanged!(parent, 'c1', { 'Shipping': 'Pallet' }, ctx)).toBe(true)
     expect(upsertVariationAttribute).not.toHaveBeenCalled()
     expect(setVariantAttributeValue).not.toHaveBeenCalled()
     expect(ensureAttributeValueByLabel).not.toHaveBeenCalled()
   })
 
-  it('rowChanged is false for a blank marked cell', async () => {
+  it('rowChanged is false for a blank cell', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    expect(await provider.rowChanged!(parent, 'c1', { 'Shipping *': '' }, ctx)).toBe(false)
+    expect(await provider.rowChanged!(parent, 'c1', { 'Shipping': '' }, ctx)).toBe(false)
   })
 
-  it('rowChanged is false for a marked heading naming no attribute that exists', async () => {
+  it('rowChanged is false for a heading naming no attribute that exists', async () => {
     getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    expect(await provider.rowChanged!(parent, 'c1', { 'Made Up *': 'x' }, ctx)).toBe(false)
+    expect(await provider.rowChanged!(parent, 'c1', { 'Made Up Column': 'x' }, ctx)).toBe(false)
   })
+})
 
-  // The marker outliving its Pull must not report phantom work for ever.
-  it('rowChanged is false when the column already holds that value', async () => {
-    listVariationColumns.mockResolvedValueOnce([
-      { assignmentId: 'asg-ship', attributeId: 'attr-shipping', name: 'Shipping', position: 0, values: [] },
-    ])
-    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { 'asg-ship': { valueId: 'v-pallet', label: 'Pallet' } } })
+// The half that makes auto-attach reversible. Without it, deleting a column on
+// the Attributes tab lasted until the next Pull put it straight back - which is
+// exactly why the feature was taken out in v0.1.35.
+describe('an attribute the owner has taken off a product by hand', () => {
+  it('is not put back by a heading, and nothing is written', async () => {
+    // The block is enforced inside the INSERT, so the refusal arrives as null.
+    upsertVariationAttribute.mockResolvedValueOnce(null)
+    getVariantAttributeValues.mockResolvedValueOnce({})
     const parent = nextParent()
     const ctx = await provider.beginImport!(parent, ['c1'])
-    expect(await provider.rowChanged!(parent, 'c1', { 'Shipping *': 'Pallet' }, ctx)).toBe(false)
+    await provider.applyImportedRow(parent, 'c1', { 'Shipping': 'Pallet' }, ctx)
+    expect(setVariantAttributeValue).not.toHaveBeenCalled()
+  })
+
+  it('does not keep showing up as a change in the preview', async () => {
+    const parent = nextParent()
+    listVariationAttachBlocks.mockResolvedValueOnce(new Set([`${parent}|attr-shipping`]))
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    expect(await provider.rowChanged!(parent, 'c1', { 'Shipping': 'Pallet' }, ctx)).toBe(false)
+  })
+
+  it('blocks that pair only - another attribute on the same product still attaches', async () => {
+    const parent = nextParent()
+    listVariationAttachBlocks.mockResolvedValueOnce(new Set([`${parent}|attr-shipping`]))
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    expect(await provider.rowChanged!(parent, 'c1', { 'Catalog': 'Seating' }, ctx)).toBe(true)
+  })
+
+  // One context now covers many parents (beginImportMany), so the block key has
+  // to carry the product. Keyed on the attribute alone, one product's removal
+  // would silently mute the attach on every other product in the batch.
+  it('blocks it on that product only - the same attribute elsewhere still attaches', async () => {
+    const blocked = nextParent()
+    const other = nextParent()
+    listVariationAttachBlocks.mockResolvedValueOnce(new Set([`${blocked}|attr-shipping`]))
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const ctx = await provider.beginImport!(blocked, ['c1'])
+    expect(await provider.rowChanged!(blocked, 'c1', { 'Shipping': 'Pallet' }, ctx)).toBe(false)
+    expect(await provider.rowChanged!(other, 'c2', { 'Shipping': 'Pallet' }, ctx)).toBe(true)
   })
 })

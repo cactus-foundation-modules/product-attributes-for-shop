@@ -73,3 +73,18 @@ CREATE TABLE IF NOT EXISTS "pat_settings" (
     CONSTRAINT "pat_settings_singleton_check" CHECK ("id" = 'singleton')
 );
 INSERT INTO "pat_settings" ("id") VALUES ('singleton') ON CONFLICT DO NOTHING;
+
+-- Arrived in 011; kept in step here so a fresh install builds it in one go.
+-- Attributes the owner has taken off a product's variations, so a plain column
+-- heading on the Google Sheet never re-attaches one they have removed. The full
+-- reasoning is in 011_variation_attach_blocks.sql.
+CREATE TABLE IF NOT EXISTS "pat_variation_attach_blocks" (
+    "product_id" TEXT NOT NULL,
+    "attribute_id" TEXT NOT NULL,
+    "blocked_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "pat_variation_attach_blocks_pkey" PRIMARY KEY ("product_id", "attribute_id"),
+    CONSTRAINT "pat_variation_attach_blocks_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "shp_products"("id") ON DELETE CASCADE,
+    CONSTRAINT "pat_variation_attach_blocks_attribute_id_fkey" FOREIGN KEY ("attribute_id") REFERENCES "pat_attributes"("id") ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS "pat_variation_attach_blocks_attribute_id_idx"
+    ON "pat_variation_attach_blocks" ("attribute_id");
