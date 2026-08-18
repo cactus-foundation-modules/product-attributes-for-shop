@@ -170,6 +170,41 @@ export async function listVariationAttachBlocks(productIds: string[]): Promise<S
   return new Set(rows.map((r) => `${r.product_id}|${r.attribute_id}`))
 }
 
+// Every (product, attribute) pair among the ones asked about where an auto-attach
+// would DECLINE, as "productId|attributeId" keys.
+//
+// Both auto-attach upserts below insert an un-named helping and reuse an existing
+// one only when it is already of the kind they want; when the un-named slot is
+// held by a helping of the OTHER kind they hand back null and leave the product
+// alone. The read-only twins (`rowChanged`) have to know that, or they report a
+// change the apply will decline to make - and a Pull that lists rows it then
+// cannot change lists them again, and again, for ever. That is exactly what a
+// live catalogue did: 96 products and 13,691 variations "to update" on every
+// single Pull, each one a heading naming an attribute the product carried only
+// as the other kind of helping.
+//
+// `wantVariations` picks which upsert is being asked about: true for
+// upsertVariationAttribute, false for upsertProductLevelAttribute.
+export async function listAutoAttachDeclines(
+  productIds: string[],
+  wantVariations: boolean,
+): Promise<Set<string>> {
+  if (productIds.length === 0) return new Set()
+  const rows = await prisma.$queryRaw<{ product_id: string; attribute_id: string }[]>`
+    SELECT taken."product_id", taken."attribute_id"
+    FROM "pat_product_attributes" taken
+    WHERE taken."product_id" IN (${Prisma.join(productIds)})
+      AND taken."name_override" IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM "pat_product_attributes" usable
+        WHERE usable."product_id" = taken."product_id"
+          AND usable."attribute_id" = taken."attribute_id"
+          AND usable."use_for_variations" = ${wantVariations}
+      )
+  `
+  return new Set(rows.map((r) => `${r.product_id}|${r.attribute_id}`))
+}
+
 // Upserts a single membership row without disturbing the rest of the set, and
 // hands back the helping's id so the caller can file per-variant values against
 // it. Used by the "Copy from variations" import so it can mark the attributes it

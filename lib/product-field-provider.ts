@@ -4,6 +4,7 @@ import {
   ensureAttributeValueByLabel,
   findAttributeValueByLabel,
   listAllAttributes,
+  listAutoAttachDeclines,
   upsertProductLevelAttribute,
 } from '@/modules/product-attributes-for-shop/lib/db/membership'
 import {
@@ -105,6 +106,18 @@ type ProdImportCtx = {
   // the pass - see listProductLevelColumnsForProducts.
   columns: Map<string, PatProductLevelColumn[]>
   labelCache: Map<string, string | null>
+  // Labels the READ-ONLY twin looked up and did not find, kept out of
+  // `labelCache` because the write path reads that and would take a cached
+  // "not found" for "nothing to store" - never creating the value, never writing
+  // the cell, and offering the same row up on the next Pull for ever. Positive
+  // hits are still shared; only the misses are kept apart. The variant provider
+  // carries the same set for the same reason.
+  missCache: Set<string>
+  // "productId|attributeId" for every pair whose auto-attach would DECLINE - the
+  // un-named slot is held by a VARIATION helping, which is never flipped. Without
+  // it the read-only twin reported a change the apply then declined to make, so a
+  // Pull listed the same products every time it ran.
+  declines: Set<string>
   // Attributes auto-attached at product level during this import, attribute id ->
   // the assignment id it got. Keeps the upsert to once per attribute per product
   // rather than once per row - a product is a single row on the Products tab, so
@@ -114,6 +127,7 @@ type ProdImportCtx = {
 
 function isProdImportCtx(ctx: unknown): ctx is ProdImportCtx {
   return !!ctx && typeof ctx === 'object' && 'current' in ctx && 'labelCache' in ctx && 'assigned' in ctx
+    && 'missCache' in ctx && 'declines' in ctx
 }
 
 function currentValueIds(ctx: unknown, productId: string, assignmentId: string): Set<string> {
@@ -139,9 +153,10 @@ export const productAttributesProductFieldProvider = {
 
   // Preload every product's current product-level ticks in one query.
   async beginImport(productIds: string[]): Promise<ProdImportCtx> {
-    const [byProduct, columns] = await Promise.all([
+    const [byProduct, columns, declines] = await Promise.all([
       getProductOwnValueIdsByAssignment(productIds),
       listProductLevelColumnsForProducts(productIds),
+      listAutoAttachDeclines(productIds, false),
     ])
     const current = new Map<string, Map<string, Set<string>>>()
     for (const [productId, byAssignment] of Object.entries(byProduct)) {
@@ -149,7 +164,7 @@ export const productAttributesProductFieldProvider = {
       for (const [assignmentId, valueIds] of Object.entries(byAssignment)) assignmentMap.set(assignmentId, new Set(valueIds))
       current.set(productId, assignmentMap)
     }
-    return { current, columns, labelCache: new Map(), assigned: new Map() }
+    return { current, columns, labelCache: new Map(), missCache: new Set(), assigned: new Map(), declines }
   },
 
   async applyImportedRow(productId: string, row: Record<string, string>, ctx?: unknown): Promise<boolean> {
@@ -248,9 +263,13 @@ export const productAttributesProductFieldProvider = {
       for (const label of parseLabels(rowByLower.get(key) ?? '')) {
         const cacheKey = `${col.attributeId}|${label.toLowerCase()}`
         let valueId: string | null | undefined = importCtx?.labelCache.get(cacheKey)
+        if (valueId === undefined && importCtx?.missCache.has(cacheKey)) valueId = null
         if (valueId === undefined) {
           valueId = await findAttributeValueByLabel(col.attributeId, label)
-          importCtx?.labelCache.set(cacheKey, valueId)
+          // A hit is the id an ensure would return, so the write path may share
+          // it; a miss is true only of this read-only lookup. See `missCache`.
+          if (valueId === null) importCtx?.missCache.add(cacheKey)
+          else importCtx?.labelCache.set(cacheKey, valueId)
         }
         if (valueId === null) return true // apply would create and tick a new value
         wanted.add(valueId)
@@ -262,16 +281,23 @@ export const productAttributesProductFieldProvider = {
     // non-empty value in a Products-tab column that names an existing attribute
     // this product does not use at product level yet would attach it and tick the
     // value on apply - nothing is stored against it, so it counts as a change.
-    // Creates nothing. (May over-report the rare case where only a variation
-    // helping exists and apply would decline: the row then goes through as a
-    // no-op, slower but never wrong.)
+    // Creates nothing. A pair whose only helping is a variation one is declined
+    // here exactly as apply declines it: reporting it was not merely slow, it was
+    // a change that could never happen, so the Pull offered the same products up
+    // every time it ran.
     const assignedNames = new Set(cols.map((c) => c.name.trim().toLowerCase()))
     const attrByName = await attributesByName()
     for (const [rawKey, rawVal] of Object.entries(row)) {
       const key = rawKey.trim().toLowerCase()
       if (!isAutoAttachHeader(key, assignedNames)) continue
       if (parseLabels(rawVal ?? '').length === 0) continue
-      if (attrByName.has(key)) return true
+      const attr = attrByName.get(key)
+      if (!attr) continue
+      // The un-named slot is a variation helping, which upsertProductLevelAttribute
+      // never flips - applying this row would leave the product alone, so neither
+      // does this.
+      if (importCtx?.declines.has(`${productId}|${attr.id}`)) continue
+      return true
     }
     return false
   },

@@ -41,6 +41,9 @@ const upsertVariationAttribute = vi.fn(
 )
 // Pairs the owner has taken off by hand. Empty unless a test says otherwise.
 const listVariationAttachBlocks = vi.fn(async (_ids: string[]): Promise<Set<string>> => new Set())
+// Pairs whose auto-attach would decline because the un-named helping is the
+// owner's product-level one. Empty unless a test says otherwise.
+const listAutoAttachDeclines = vi.fn(async (_ids: string[], _v: boolean): Promise<Set<string>> => new Set())
 
 vi.mock('@/modules/product-attributes-for-shop/lib/db/membership', () => ({
   listVariationColumns: (...a: unknown[]) => listVariationColumns(...(a as [string])),
@@ -51,6 +54,7 @@ vi.mock('@/modules/product-attributes-for-shop/lib/db/membership', () => ({
   listAllAttributes: (...a: unknown[]) => listAllAttributes(...(a as [])),
   upsertVariationAttribute: (...a: unknown[]) => upsertVariationAttribute(...(a as [string, string])),
   listVariationAttachBlocks: (...a: unknown[]) => listVariationAttachBlocks(...(a as [string[]])),
+  listAutoAttachDeclines: (...a: unknown[]) => listAutoAttachDeclines(...(a as [string[], boolean])),
 }))
 
 import { productAttributesVariantFieldProvider as provider } from '@/modules/product-attributes-for-shop/lib/variant-field-provider'
@@ -68,6 +72,7 @@ beforeEach(() => {
   listAllAttributes.mockClear()
   upsertVariationAttribute.mockClear()
   listVariationAttachBlocks.mockClear()
+  listAutoAttachDeclines.mockClear()
 })
 
 describe('productAttributesVariantFieldProvider import batching', () => {
@@ -450,5 +455,50 @@ describe('an attribute the owner has taken off a product by hand', () => {
     const ctx = await provider.beginImport!(blocked, ['c1'])
     expect(await provider.rowChanged!(blocked, 'c1', { 'Shipping': 'Pallet' }, ctx)).toBe(false)
     expect(await provider.rowChanged!(other, 'c2', { 'Shipping': 'Pallet' }, ctx)).toBe(true)
+  })
+})
+
+// The pair of defects that made a Pull immortal: 13,691 variations offered up for
+// update on every run of a live catalogue, "updated" without complaint, then
+// offered up again, unchanged, for ever.
+describe('a change the preview reports is a change the import then makes', () => {
+  // shop-variations' importer asks rowChanged and then applyImportedRow with the
+  // SAME context. rowChanged's lookup never creates a value, so a label the
+  // vocabulary has not seen resolves to null - and caching that null where the
+  // write path reads it told applyCellValue there was nothing to store. The value
+  // was never created, the cell never written, and the row came back next time.
+  it('a label new to the vocabulary is still created when rowChanged asked first', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    const row = { 'Main finish': 'New Oak' }
+    expect(await provider.rowChanged!(parent, 'c1', row, ctx)).toBe(true)
+    await provider.applyImportedRow(parent, 'c1', row, ctx)
+    expect(ensureAttributeValueByLabel).toHaveBeenCalledWith('attr1', 'New Oak')
+    expect(setVariantAttributeValue).toHaveBeenCalledWith('c1', 'asg1', 'v-new oak')
+  })
+
+  // And with that write made, the next Pull's compare says nothing to do.
+  it('and the next run reports it as unchanged', async () => {
+    getVariantAttributeValues.mockResolvedValueOnce({ 'c1': { asg1: { valueId: 'v-new oak', label: 'New Oak' } } })
+    const parent = nextParent()
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    findAttributeValueByLabel.mockResolvedValueOnce('v-new oak')
+    expect(await provider.rowChanged!(parent, 'c1', { 'Main finish': 'New Oak' }, ctx)).toBe(false)
+  })
+
+  // The other half: a heading naming an attribute whose un-named helping is the
+  // owner's product-level one. upsertVariationAttribute declines rather than flip
+  // it, so the preview must decline to report it - it was counting a change that
+  // could never be made.
+  it('an attach the import would decline is not reported as a change', async () => {
+    const parent = nextParent()
+    listAutoAttachDeclines.mockResolvedValueOnce(new Set([`${parent}|attr-shipping`]))
+    getVariantAttributeValues.mockResolvedValueOnce({})
+    const ctx = await provider.beginImport!(parent, ['c1'])
+    expect(await provider.rowChanged!(parent, 'c1', { 'Shipping': 'Pallet' }, ctx)).toBe(false)
+    // That product only, and that attribute only.
+    expect(await provider.rowChanged!(parent, 'c1', { 'Catalog': 'Seating' }, ctx)).toBe(true)
+    expect(await provider.rowChanged!(nextParent(), 'c2', { 'Shipping': 'Pallet' }, ctx)).toBe(true)
   })
 })

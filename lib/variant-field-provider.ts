@@ -8,6 +8,7 @@ import {
   findAttributeValueByLabel,
   listAllAttributes,
   listVariationAttachBlocks,
+  listAutoAttachDeclines,
   upsertVariationAttribute,
 } from '@/modules/product-attributes-for-shop/lib/db/membership'
 import { ProductAttributesVariantCell } from '@/modules/product-attributes-for-shop/components/admin/ProductAttributesVariantCell'
@@ -117,6 +118,20 @@ type AttrImportCtx = {
   // cache is enough and one lookup is not worth a query for the whole catalogue.
   columns?: Map<string, PatVariationColumn[]>
   labelCache: Map<string, string | null>
+  // Labels the READ-ONLY twin looked up and did not find. It must never put those
+  // misses in `labelCache`: the write path reads that same cache, and a cached
+  // "not found" told applyCellValue there was no value to store - so a label the
+  // sheet had introduced was never created, the cell never written, and the next
+  // Pull offered the very same row up again. On a live catalogue that was 13,691
+  // variations "to update" on every Pull, for ever. Positive hits are still
+  // shared (an id found is the id an ensure would return); only the misses are
+  // kept apart.
+  missCache: Set<string>
+  // "productId|attributeId" for every pair whose auto-attach would DECLINE -
+  // the un-named slot is held by a product-level helping, which is never
+  // flipped. Preloaded so the read-only twin can decline in step with the write
+  // path instead of reporting a change that never happens.
+  declines: Set<string>
   // Attributes attached during this import, "productId|attributeId" -> the
   // assignment id it got, so a marked column is upserted once rather than once per
   // row that carries it. Keyed by PRODUCT and attribute, not attribute alone: one
@@ -132,7 +147,7 @@ type AttrImportCtx = {
 
 function isAttrImportCtx(ctx: unknown): ctx is AttrImportCtx {
   return !!ctx && typeof ctx === 'object' && 'current' in ctx && 'labelCache' in ctx && 'attached' in ctx
-    && 'blocks' in ctx
+    && 'blocks' in ctx && 'missCache' in ctx && 'declines' in ctx
 }
 
 // The current value id for a (child, helping), from the preloaded context. A
@@ -208,14 +223,23 @@ async function cellChanged(
   // own lookups. Reading the cache without ever filling it meant a catalogue
   // repeating "Oak" down 577 rows asked the database 577 times, once per row per
   // column, and a preview of a few hundred variants spent the whole of its
-  // sixty-second budget on round trips it had already made. The two halves never
-  // share a context (a preview and an import each begin their own), so the
-  // find-only ids cached here can never stand in for the ensure an import would do.
+  // sixty-second budget on round trips it had already made.
+  //
+  // The two halves DO share a context: shop-variations' importer asks rowChanged
+  // and then applyImportedRow with the same one. A found id is the same answer
+  // either half would give, so it is shared; a MISS is not, because the write
+  // path would go on to create the value - so misses live in `missCache`, which
+  // only this half reads.
   const cacheKey = `${attributeId}|${cellValue.toLowerCase()}`
   let valueId: string | null | undefined = importCtx?.labelCache.get(cacheKey)
+  if (valueId === undefined && importCtx?.missCache.has(cacheKey)) valueId = null
   if (valueId === undefined) {
     valueId = await findAttributeValueByLabel(attributeId, cellValue)
-    importCtx?.labelCache.set(cacheKey, valueId)
+    // A hit is the id an ensure would hand back too, so the write path may share
+    // it. A MISS is only true of this read-only lookup - the write path would
+    // create the value - so it is kept in its own set. See `missCache`.
+    if (valueId === null) importCtx?.missCache.add(cacheKey)
+    else importCtx?.labelCache.set(cacheKey, valueId)
   }
   // A non-empty label the vocabulary has not seen yet resolves to null here, but
   // applyImportedRow WILL create it and assign it - a brand-new value id that can
@@ -250,9 +274,10 @@ export const productAttributesVariantFieldProvider = {
   // Preload every child's current variation-attribute value for this parent in one
   // query, so applyImportedRow diffs in memory instead of writing blind per row.
   async beginImport(productId: string, childProductIds: string[]): Promise<AttrImportCtx> {
-    const [byChild, blocks] = await Promise.all([
+    const [byChild, blocks, declines] = await Promise.all([
       getVariantAttributeValues(productId, childProductIds),
       listVariationAttachBlocks([productId]),
+      listAutoAttachDeclines([productId], true),
     ])
     const current = new Map<string, Map<string, string | null>>()
     for (const [childId, byAssignment] of Object.entries(byChild)) {
@@ -260,7 +285,7 @@ export const productAttributesVariantFieldProvider = {
       for (const [assignmentId, v] of Object.entries(byAssignment)) assignmentMap.set(assignmentId, v.valueId)
       current.set(childId, assignmentMap)
     }
-    return { current, labelCache: new Map(), attached: new Map(), blocks }
+    return { current, labelCache: new Map(), missCache: new Set(), attached: new Map(), blocks, declines }
   },
 
   // The batched preload: one context covering many parents, so a catalogue-wide
@@ -270,10 +295,11 @@ export const productAttributesVariantFieldProvider = {
   async beginImportMany(parents: Array<{ productId: string; childProductIds: string[] }>): Promise<AttrImportCtx> {
     const productIds = parents.map((p) => p.productId)
     const childProductIds = parents.flatMap((p) => p.childProductIds)
-    const [byChild, columns, blocks] = await Promise.all([
+    const [byChild, columns, blocks, declines] = await Promise.all([
       getVariantAttributeValuesForProducts(productIds, childProductIds),
       listVariationColumnsForProducts(productIds),
       listVariationAttachBlocks(productIds),
+      listAutoAttachDeclines(productIds, true),
     ])
     const current = new Map<string, Map<string, string | null>>()
     for (const [childId, byAssignment] of Object.entries(byChild)) {
@@ -281,7 +307,7 @@ export const productAttributesVariantFieldProvider = {
       for (const [assignmentId, v] of Object.entries(byAssignment)) assignmentMap.set(assignmentId, v.valueId)
       current.set(childId, assignmentMap)
     }
-    return { current, columns, labelCache: new Map(), attached: new Map(), blocks }
+    return { current, columns, labelCache: new Map(), missCache: new Set(), attached: new Map(), blocks, declines }
   },
 
   async applyImportedRow(productId: string, childProductId: string, row: Record<string, string>, ctx?: unknown) {
@@ -373,6 +399,10 @@ export const productAttributesVariantFieldProvider = {
       const attr = attrByName.get(key)
       if (!attr) continue
       if (importCtx?.blocks.has(`${productId}|${attr.id}`)) continue
+      // The un-named slot is a product-level helping, which upsertVariationAttribute
+      // never flips - applying this row would leave the product alone, so neither
+      // does this.
+      if (importCtx?.declines.has(`${productId}|${attr.id}`)) continue
       if (await cellChanged(attr.id, null, cellValue, childProductId, importCtx)) return true
     }
     return false

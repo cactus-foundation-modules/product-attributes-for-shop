@@ -17,6 +17,9 @@ const setProductAssignmentValues = vi.fn(async (_p: string, _a: string, _v: stri
 // auto-attach) behave exactly as before; cases that exercise auto-attach seed it.
 const listAllAttributes = vi.fn(async (): Promise<{ id: string; name: string }[]> => [])
 const upsertProductLevelAttribute = vi.fn(async (_p: string, _a: string): Promise<string | null> => null)
+// Pairs whose auto-attach would decline because the un-named helping is a
+// variation one. Empty unless a test says otherwise.
+const listAutoAttachDeclines = vi.fn(async (_ids: string[], _v: boolean): Promise<Set<string>> => new Set())
 
 // The batched twin beginImport preloads through. Built from the same fixture, so
 // a product asked for in a batch gets exactly what it would have got one at a
@@ -33,6 +36,7 @@ vi.mock('@/modules/product-attributes-for-shop/lib/db/membership', () => ({
   findAttributeValueByLabel: (...a: unknown[]) => findAttributeValueByLabel(...(a as [string, string])),
   listAllAttributes: (...a: unknown[]) => listAllAttributes(...(a as [])),
   upsertProductLevelAttribute: (...a: unknown[]) => upsertProductLevelAttribute(...(a as [string, string])),
+  listAutoAttachDeclines: (...a: unknown[]) => listAutoAttachDeclines(...(a as [string[], boolean])),
 }))
 vi.mock('@/modules/product-attributes-for-shop/lib/db/assignments', () => ({
   getProductOwnValuesByAssignment: (...a: unknown[]) => getProductOwnValuesByAssignment(...(a as [string[]])),
@@ -58,6 +62,7 @@ beforeEach(() => {
   // cases never use a "Fabric" header, so they see no auto-attach.
   listAllAttributes.mockResolvedValue([{ id: 'attr-fabric', name: 'Fabric' }])
   upsertProductLevelAttribute.mockClear()
+  listAutoAttachDeclines.mockClear()
   upsertProductLevelAttribute.mockResolvedValue(null)
 })
 
@@ -228,5 +233,34 @@ describe('productAttributesProductFieldProvider.rowChanged (read-only)', () => {
     getProductOwnValueIdsByAssignment.mockResolvedValueOnce({})
     const ctx = await provider.beginImport([])
     expect(await provider.rowChanged(nextProduct(), { 'Other Column': 'x' }, ctx)).toBe(false)
+  })
+})
+
+// The product-level twin of the two defects that made a Pull immortal: 96
+// products reported as needing an attribute update on every run of a live
+// catalogue, and never changed by any of them.
+describe('a change the preview reports is a change the import then makes', () => {
+  // A heading naming an attribute whose un-named helping is a VARIATION one.
+  // upsertProductLevelAttribute declines rather than flip it, so reporting the
+  // row was reporting a change that could never happen.
+  it('an attach the import would decline is not reported as a change', async () => {
+    const product = nextProduct()
+    listAutoAttachDeclines.mockResolvedValueOnce(new Set([`${product}|attr-fabric`]))
+    const ctx = await provider.beginImport!([product])
+    expect(await provider.rowChanged!(product, { 'Fabric': 'Wool' }, ctx)).toBe(false)
+    // That product only.
+    expect(await provider.rowChanged!(nextProduct(), { 'Fabric': 'Wool' }, ctx)).toBe(true)
+  })
+
+  // rowChanged's find-only lookup must not stand in for the ensure the write path
+  // does: a cached "not found" left the value uncreated and the cell unwritten.
+  it('a label new to the vocabulary is still created when rowChanged asked first', async () => {
+    const product = nextProduct()
+    const ctx = await provider.beginImport!([product])
+    const row = { 'Markup': 'New Band' }
+    expect(await provider.rowChanged!(product, row, ctx)).toBe(true)
+    await provider.applyImportedRow(product, row, ctx)
+    expect(ensureAttributeValueByLabel).toHaveBeenCalledWith('attr1', 'New Band')
+    expect(setProductAssignmentValues).toHaveBeenCalledWith(product, 'asg1', ['v-new band'])
   })
 })
