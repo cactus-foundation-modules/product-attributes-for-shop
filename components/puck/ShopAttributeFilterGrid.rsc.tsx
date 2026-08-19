@@ -40,7 +40,7 @@ async function renderTaggedCards(template: PuckData | null, items: CardItem[], m
   return items.map(({ product, ctx }) => (
     <a
       key={product.id}
-      href={`/shop/products/${product.slug}`}
+      href={ctx.productHref}
       className="shop-card"
       data-pat-product={product.id}
       data-pat-values={(matrix.get(product.id) ?? []).join(' ')}
