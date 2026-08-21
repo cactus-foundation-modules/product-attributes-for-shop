@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="module-art.webp" alt="Product Attributes for Shop" width="640" />
+</p>
+
 # Product Attributes for Shop
 
 Filterable product attributes for the [Cactus](https://github.com/usersaynoso/cactus-foundation) shop. Define the things shoppers actually browse by - Material, Colour, Room, Finish - assign them to products and to individual variants, then drop a filtered product grid onto the storefront.
