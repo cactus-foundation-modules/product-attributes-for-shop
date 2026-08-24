@@ -1,7 +1,7 @@
 import { connection } from 'next/server'
 import { Render } from '@puckeditor/core/rsc'
 import type { Data } from '@puckeditor/core'
-import { listProducts, getProductMedia, getProductTagIds, HARD_MAX_PER_PAGE } from '@/modules/shop/lib/db'
+import { listProducts, getProductMediaForProducts, getProductTagIdsForProducts, HARD_MAX_PER_PAGE } from '@/modules/shop/lib/db'
 import { listTags, resolveCategoryProductFilter } from '@/modules/shop/lib/db/catalogue'
 import { getShopConfigCached } from '@/modules/shop/lib/config'
 import { getShopBreakpoints } from '@/modules/shop/lib/breakpoints'
@@ -118,19 +118,19 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
   }
 
   const productIds = products.map((p) => p.id)
-  const [matrix, counts, fromPrices] = await Promise.all([
+  const [matrix, counts, fromPrices, mediaByProduct, tagIdsByProduct] = await Promise.all([
     getEffectiveValueIdsByProduct(productIds, { includeVariantValues: settings.includeVariantValues }),
     countProductsByValue(productIds, { includeVariantValues: settings.includeVariantValues }),
     resolveCardFromPrices(productIds),
+    getProductMediaForProducts(productIds),
+    getProductTagIdsForProducts(productIds),
   ])
 
   const { tagById, tagsById } = buildTagMaps(tags)
-  const items: CardItem[] = await Promise.all(
-    products.map(async (product) => {
-      const [media, tagIds] = await Promise.all([getProductMedia(product.id), getProductTagIds(product.id)])
-      return { product, ctx: buildCardContext(product, media, tagById, tagIds, config.currencySymbol, config, fromPrices.get(product.id) ?? null, undefined, tagsById) }
-    }),
-  )
+  const items: CardItem[] = products.map((product) => ({
+    product,
+    ctx: buildCardContext(product, mediaByProduct.get(product.id) ?? [], tagById, tagIdsByProduct.get(product.id) ?? [], config.currencySymbol, config, fromPrices.get(product.id) ?? null, undefined, tagsById),
+  }))
 
   const cards = await renderTaggedCards(template, items, matrix)
 

@@ -73,25 +73,74 @@ async function hasOptionValueSmallColumn(): Promise<boolean> {
 // product has no variants.
 export async function listVariantsForProduct(productId: string): Promise<PatVariantRef[]> {
   if (!(await hasVariationsTables())) return []
-  const rows = await prisma.$queryRaw<{ child_product_id: string; enabled: boolean; position: number; label: string | null }[]>`
-    SELECT
-      v."child_product_id",
-      v."enabled",
-      v."position",
-      string_agg(ov."label", ' / ' ORDER BY o."position" ASC, ov."position" ASC) AS "label"
-    FROM "svr_variants" v
-    LEFT JOIN "svr_variant_values" vv ON vv."variant_id" = v."id"
-    LEFT JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
-    LEFT JOIN "svr_options" o ON o."id" = ov."option_id"
-    WHERE v."product_id" = ${productId}
-    GROUP BY v."id", v."child_product_id", v."enabled", v."position"
-    ORDER BY v."position" ASC
+  const variants = await listVariantRows(productId)
+  if (variants.length === 0) return []
+  const values = await variantOptionValues(variants.map((v) => v.id))
+
+  // Label assembled here rather than by string_agg, because the values now
+  // arrive keyed by variant id (see variantOptionValues). Same ordering the SQL
+  // had: option position, then value position within the option.
+  const byVariant = new Map<string, { label: string; optionPosition: number; valuePosition: number }[]>()
+  for (const v of values) {
+    const list = byVariant.get(v.variant_id) ?? []
+    list.push({ label: v.label, optionPosition: v.option_position, valuePosition: v.value_position })
+    byVariant.set(v.variant_id, list)
+  }
+
+  return variants.map((variant) => {
+    const parts = (byVariant.get(variant.id) ?? [])
+      .sort((a, b) => a.optionPosition - b.optionPosition || a.valuePosition - b.valuePosition)
+      .map((part) => part.label)
+    // A variant carrying no option values still appears, named 'Variant' -
+    // exactly what the LEFT JOIN and its null fallback produced before.
+    return {
+      childProductId: variant.childProductId,
+      label: parts.length > 0 ? parts.join(' / ') : 'Variant',
+      enabled: variant.enabled,
+    }
+  })
+}
+
+/** A product's variants, in matrix order. */
+async function listVariantRows(productId: string): Promise<{ id: string; childProductId: string; enabled: boolean }[]> {
+  const rows = await prisma.$queryRaw<{ id: string; child_product_id: string; enabled: boolean }[]>`
+    SELECT "id", "child_product_id", "enabled" FROM "svr_variants"
+    WHERE "product_id" = ${productId}
+    ORDER BY "position" ASC
   `
-  return rows.map((r) => ({
-    childProductId: r.child_product_id,
-    label: r.label ?? 'Variant',
-    enabled: r.enabled,
-  }))
+  return rows.map((r) => ({ id: r.id, childProductId: r.child_product_id, enabled: r.enabled }))
+}
+
+/**
+ * The option values carried by a set of variants, keyed by variant id.
+ *
+ * `= ANY($1::text[])` rather than joining back to svr_variants on product_id.
+ * Asked as a join, Postgres costs the two sides, picks a hash join and
+ * sequentially scans the WHOLE svr_variant_values table - on a 588-variant
+ * product that is ~70,000 rows read to return ~2,300, and it was the largest
+ * single source of wasted reads on the live install. Handed the variant ids it
+ * uses the (variant_id, option_value_id) primary key as a covering index
+ * instead: measured at roughly 3ms against 25ms, and the plan holds once
+ * Postgres switches the prepared statement to a generic plan.
+ *
+ * The extra round trip for the ids is free in practice - svr_variants is
+ * indexed on product_id, and both callers want the variant rows anyway.
+ */
+async function variantOptionValues(
+  variantIds: string[],
+): Promise<{ variant_id: string; option_value_id: string; label: string; option_position: number; value_position: number }[]> {
+  if (variantIds.length === 0) return []
+  return prisma.$queryRaw`
+    SELECT vv."variant_id",
+           vv."option_value_id",
+           ov."label",
+           o."position" AS "option_position",
+           ov."position" AS "value_position"
+    FROM "svr_variant_values" vv
+    JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
+    JOIN "svr_options" o ON o."id" = ov."option_id"
+    WHERE vv."variant_id" = ANY(${variantIds}::text[])
+  `
 }
 
 export type VariationOption = {
@@ -133,17 +182,17 @@ export async function listVariationOptions(productId: string): Promise<Variation
 // the matching option value.
 export async function getVariantOptionValueMap(productId: string): Promise<Map<string, string[]>> {
   if (!(await hasVariationsTables())) return new Map()
-  const rows = await prisma.$queryRaw<{ child_product_id: string; option_value_id: string }[]>`
-    SELECT v."child_product_id", vv."option_value_id"
-    FROM "svr_variants" v
-    JOIN "svr_variant_values" vv ON vv."variant_id" = v."id"
-    WHERE v."product_id" = ${productId}
-  `
+  const variants = await listVariantRows(productId)
+  if (variants.length === 0) return new Map()
+  const childByVariant = new Map(variants.map((v) => [v.id, v.childProductId]))
+  const rows = await variantOptionValues(variants.map((v) => v.id))
   const map = new Map<string, string[]>()
   for (const row of rows) {
-    const list = map.get(row.child_product_id) ?? []
+    const childProductId = childByVariant.get(row.variant_id)
+    if (!childProductId) continue
+    const list = map.get(childProductId) ?? []
     list.push(row.option_value_id)
-    map.set(row.child_product_id, list)
+    map.set(childProductId, list)
   }
   return map
 }
