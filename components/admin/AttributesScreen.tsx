@@ -482,6 +482,10 @@ function AttributeCard({
   // How much of a long value list is on show. Kept per card, so opening up
   // Colour does not also unfold every other attribute on the page.
   const [visibleValues, setVisibleValues] = useState(VALUE_PAGE_SIZE)
+  // Shut by default. A card carries its whole value list and its Add value box,
+  // and with a screen's worth of attributes drawn open the one being looked for
+  // was several pages down. Kept per card, so opening Colour leaves the rest shut.
+  const [expanded, setExpanded] = useState(false)
   const base = '/api/m/product-attributes-for-shop/admin'
   const isSwatch = attribute.controlType === 'SWATCH'
   const isImage = attribute.controlType === 'IMAGE'
@@ -612,6 +616,20 @@ function AttributeCard({
           )}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Counts the values in the label because "Show values" on its own gives
+              no idea whether the press unfolds three of them or six hundred - and
+              an attribute with none still needs a way through to its Add value box. */}
+          <button
+            className="btn btn-secondary btn-sm"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((open) => !open)}
+          >
+            {expanded
+              ? 'Hide values'
+              : attribute.values.length === 0
+                ? 'Add values'
+                : `Show ${attribute.values.length} value${attribute.values.length === 1 ? '' : 's'}`}
+          </button>
           <MoveButtons
             label={attribute.name}
             canMoveUp={canMoveUp}
@@ -670,248 +688,252 @@ function AttributeCard({
         </div>
       </div>
 
-      <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.375rem', flexWrap: 'wrap' }}>
-        {attribute.values.length === 0 && (
-          <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>No values yet.</span>
-        )}
-        {shownValues.map((value) => (
-          <span
-            key={value.id}
-            onDragOver={(e) => { if (draggedValueId) e.preventDefault() }}
-            onDrop={(e) => {
-              e.preventDefault()
-              if (draggedValueId) void moveValue(draggedValueId, value.id)
-              setDraggedValueId(null)
-            }}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.375rem',
-              fontSize: '0.8125rem',
-              padding: '0.125rem 0.5rem',
-              borderRadius: 999,
-              background: 'var(--color-bg-subtle)',
-              border: '1px solid var(--color-border)',
-              opacity: draggedValueId === value.id ? 0.5 : 1,
-            }}
-          >
-            {/* Drag handle, not the whole chip: the chip is full of its own
-                buttons and inputs (rename, delete, colour picker), and a click
-                on any of those should never risk being read as a drag. */}
-            <span
-              draggable={!busy}
-              onDragStart={(e) => { setDraggedValueId(value.id); e.dataTransfer.effectAllowed = 'move' }}
-              onDragEnd={() => setDraggedValueId(null)}
-              aria-label={`Drag to reorder ${value.label}`}
-              title="Drag to reorder"
-              style={{ cursor: busy ? 'default' : 'grab', color: 'var(--color-text-secondary)', lineHeight: 1, userSelect: 'none' }}
-            >
-              ⠿
-            </span>
-            {isImage ? (
-              // All three renditions, not one: which of them the storefront
-              // draws where, and what each of them weighs, is exactly what an
-              // owner comes to this screen to find out. Hovering any box says so
-              // in words - including an empty one, which says which copy would go
-              // there - and the ring marks the ones in use.
-              <SwatchRenditions
-                attributeId={attribute.id}
-                label={value.label}
-                swatch={value.swatch}
-                swatchSmall={value.swatchSmall ?? null}
-                swatchTiny={value.swatchTiny ?? null}
-                files={swatchFiles}
-                disabled={busy}
-                size={18}
-                onPick={(url) => onEditValue(value.id, value.label, { swatch: url })}
-              />
-            ) : isSwatch ? (
-              // The colour is editable in place rather than set-once-on-add: a
-              // shop that has settled on a slightly different oak should not have
-              // to delete the value and lose every product ticked against it.
-              // Uncontrolled, and committed on blur rather than on change: a
-              // native colour picker fires change on every drag of the cursor,
-              // which as a controlled field would be a request per shade.
-              <input
-                type="color"
-                key={value.swatch ?? 'none'}
-                defaultValue={value.swatch && !isImageSwatch(value.swatch) ? value.swatch : '#888888'}
-                disabled={busy}
-                aria-label={`Colour for ${value.label}`}
-                onBlur={(e) => {
-                  if (e.target.value !== value.swatch) void onEditValue(value.id, value.label, { swatch: e.target.value })
-                }}
-                style={{ width: 16, height: 16, padding: 0, border: '1px solid var(--color-border)', borderRadius: 999, background: 'none', cursor: busy ? 'default' : 'pointer' }}
-              />
-            ) : value.swatch ? (
-              <span aria-hidden style={{ width: 10, height: 10, borderRadius: 999, background: value.swatch, border: '1px solid var(--color-border)' }} />
-            ) : null}
-            {/* The label itself is the rename control - a chip has no room for a
-                separate button beside the delete one, and clicking the word you
-                want to change is where anybody would try first. */}
-            <button
-              type="button"
-              aria-label={`Rename ${value.label}`}
-              title="Rename"
-              disabled={busy}
-              onClick={() => {
-                const next = prompt(`Rename "${value.label}" to:`, value.label)?.trim()
-                if (next && next !== value.label) void onEditValue(value.id, next, { label: next })
-              }}
-              style={{
-                border: 0,
-                background: 'none',
-                padding: 0,
-                font: 'inherit',
-                color: 'inherit',
-                cursor: busy ? 'default' : 'pointer',
-                textDecoration: 'underline dotted',
-                textUnderlineOffset: '0.2em',
-              }}
-            >
-              {value.label}
-            </button>
-            {/* The slug, editable in place. It is the value's stable identity -
-                what the spreadsheet writes as "(slug)Label" and what tells two
-                "Black"s apart - so it never moves on a label rename and only
-                changes when deliberately edited here. */}
-            <button
-              type="button"
-              aria-label={`Slug for ${value.label}`}
-              title={`Spreadsheet spelling: (${value.slug})${value.label}. Click to change the slug.`}
-              disabled={busy}
-              onClick={() => {
-                const next = prompt(
-                  `Slug for "${value.label}" - its stable name in spreadsheets and imports, e.g. black-mfc:`,
-                  value.slug,
-                )?.trim()
-                if (next && next !== value.slug) void onEditValue(value.id, value.label, { slug: next })
-              }}
-              style={{
-                border: 0,
-                background: 'none',
-                padding: 0,
-                font: 'inherit',
-                fontSize: '0.6875rem',
-                color: 'var(--color-text-secondary)',
-                cursor: busy ? 'default' : 'pointer',
-                textDecoration: 'underline dotted',
-                textUnderlineOffset: '0.2em',
-              }}
-            >
-              ({value.slug})
-            </button>
-            {/* The swatch size, editable in place for the same reason the colour
-                is: the figure usually turns up after the photograph, and deleting
-                the value to re-add it with a size would take every product ticked
-                against it down too. Shown as a dash when it has never been set, so
-                there is something to click either way. */}
-            {isImage && (
-              <button
-                type="button"
-                aria-label={`Swatch size for ${value.label}`}
-                title={value.swatchSize ? 'Change the swatch size' : 'Set the swatch size'}
-                disabled={busy}
-                onClick={() => {
-                  const next = prompt(
-                    `Real-world size of the "${value.label}" swatch, e.g. 20cm. Leave blank for none.`,
-                    value.swatchSize ?? '',
-                  )
-                  if (next === null) return
-                  const trimmed = next.trim()
-                  if (trimmed !== (value.swatchSize ?? '')) {
-                    void onEditValue(value.id, value.label, { swatchSize: trimmed || null })
-                  }
+      {expanded && (
+        <>
+          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.375rem', flexWrap: 'wrap' }}>
+            {attribute.values.length === 0 && (
+              <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>No values yet.</span>
+            )}
+            {shownValues.map((value) => (
+              <span
+                key={value.id}
+                onDragOver={(e) => { if (draggedValueId) e.preventDefault() }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  if (draggedValueId) void moveValue(draggedValueId, value.id)
+                  setDraggedValueId(null)
                 }}
                 style={{
-                  border: 0,
-                  background: 'none',
-                  padding: 0,
-                  font: 'inherit',
-                  fontSize: '0.75rem',
-                  color: 'var(--color-text-secondary)',
-                  cursor: busy ? 'default' : 'pointer',
-                  textDecoration: 'underline dotted',
-                  textUnderlineOffset: '0.2em',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.375rem',
+                  fontSize: '0.8125rem',
+                  padding: '0.125rem 0.5rem',
+                  borderRadius: 999,
+                  background: 'var(--color-bg-subtle)',
+                  border: '1px solid var(--color-border)',
+                  opacity: draggedValueId === value.id ? 0.5 : 1,
                 }}
               >
-                {value.swatchSize || 'size?'}
+                {/* Drag handle, not the whole chip: the chip is full of its own
+                    buttons and inputs (rename, delete, colour picker), and a click
+                    on any of those should never risk being read as a drag. */}
+                <span
+                  draggable={!busy}
+                  onDragStart={(e) => { setDraggedValueId(value.id); e.dataTransfer.effectAllowed = 'move' }}
+                  onDragEnd={() => setDraggedValueId(null)}
+                  aria-label={`Drag to reorder ${value.label}`}
+                  title="Drag to reorder"
+                  style={{ cursor: busy ? 'default' : 'grab', color: 'var(--color-text-secondary)', lineHeight: 1, userSelect: 'none' }}
+                >
+                  ⠿
+                </span>
+                {isImage ? (
+                  // All three renditions, not one: which of them the storefront
+                  // draws where, and what each of them weighs, is exactly what an
+                  // owner comes to this screen to find out. Hovering any box says so
+                  // in words - including an empty one, which says which copy would go
+                  // there - and the ring marks the ones in use.
+                  <SwatchRenditions
+                    attributeId={attribute.id}
+                    label={value.label}
+                    swatch={value.swatch}
+                    swatchSmall={value.swatchSmall ?? null}
+                    swatchTiny={value.swatchTiny ?? null}
+                    files={swatchFiles}
+                    disabled={busy}
+                    size={18}
+                    onPick={(url) => onEditValue(value.id, value.label, { swatch: url })}
+                  />
+                ) : isSwatch ? (
+                  // The colour is editable in place rather than set-once-on-add: a
+                  // shop that has settled on a slightly different oak should not have
+                  // to delete the value and lose every product ticked against it.
+                  // Uncontrolled, and committed on blur rather than on change: a
+                  // native colour picker fires change on every drag of the cursor,
+                  // which as a controlled field would be a request per shade.
+                  <input
+                    type="color"
+                    key={value.swatch ?? 'none'}
+                    defaultValue={value.swatch && !isImageSwatch(value.swatch) ? value.swatch : '#888888'}
+                    disabled={busy}
+                    aria-label={`Colour for ${value.label}`}
+                    onBlur={(e) => {
+                      if (e.target.value !== value.swatch) void onEditValue(value.id, value.label, { swatch: e.target.value })
+                    }}
+                    style={{ width: 16, height: 16, padding: 0, border: '1px solid var(--color-border)', borderRadius: 999, background: 'none', cursor: busy ? 'default' : 'pointer' }}
+                  />
+                ) : value.swatch ? (
+                  <span aria-hidden style={{ width: 10, height: 10, borderRadius: 999, background: value.swatch, border: '1px solid var(--color-border)' }} />
+                ) : null}
+                {/* The label itself is the rename control - a chip has no room for a
+                    separate button beside the delete one, and clicking the word you
+                    want to change is where anybody would try first. */}
+                <button
+                  type="button"
+                  aria-label={`Rename ${value.label}`}
+                  title="Rename"
+                  disabled={busy}
+                  onClick={() => {
+                    const next = prompt(`Rename "${value.label}" to:`, value.label)?.trim()
+                    if (next && next !== value.label) void onEditValue(value.id, next, { label: next })
+                  }}
+                  style={{
+                    border: 0,
+                    background: 'none',
+                    padding: 0,
+                    font: 'inherit',
+                    color: 'inherit',
+                    cursor: busy ? 'default' : 'pointer',
+                    textDecoration: 'underline dotted',
+                    textUnderlineOffset: '0.2em',
+                  }}
+                >
+                  {value.label}
+                </button>
+                {/* The slug, editable in place. It is the value's stable identity -
+                    what the spreadsheet writes as "(slug)Label" and what tells two
+                    "Black"s apart - so it never moves on a label rename and only
+                    changes when deliberately edited here. */}
+                <button
+                  type="button"
+                  aria-label={`Slug for ${value.label}`}
+                  title={`Spreadsheet spelling: (${value.slug})${value.label}. Click to change the slug.`}
+                  disabled={busy}
+                  onClick={() => {
+                    const next = prompt(
+                      `Slug for "${value.label}" - its stable name in spreadsheets and imports, e.g. black-mfc:`,
+                      value.slug,
+                    )?.trim()
+                    if (next && next !== value.slug) void onEditValue(value.id, value.label, { slug: next })
+                  }}
+                  style={{
+                    border: 0,
+                    background: 'none',
+                    padding: 0,
+                    font: 'inherit',
+                    fontSize: '0.6875rem',
+                    color: 'var(--color-text-secondary)',
+                    cursor: busy ? 'default' : 'pointer',
+                    textDecoration: 'underline dotted',
+                    textUnderlineOffset: '0.2em',
+                  }}
+                >
+                  ({value.slug})
+                </button>
+                {/* The swatch size, editable in place for the same reason the colour
+                    is: the figure usually turns up after the photograph, and deleting
+                    the value to re-add it with a size would take every product ticked
+                    against it down too. Shown as a dash when it has never been set, so
+                    there is something to click either way. */}
+                {isImage && (
+                  <button
+                    type="button"
+                    aria-label={`Swatch size for ${value.label}`}
+                    title={value.swatchSize ? 'Change the swatch size' : 'Set the swatch size'}
+                    disabled={busy}
+                    onClick={() => {
+                      const next = prompt(
+                        `Real-world size of the "${value.label}" swatch, e.g. 20cm. Leave blank for none.`,
+                        value.swatchSize ?? '',
+                      )
+                      if (next === null) return
+                      const trimmed = next.trim()
+                      if (trimmed !== (value.swatchSize ?? '')) {
+                        void onEditValue(value.id, value.label, { swatchSize: trimmed || null })
+                      }
+                    }}
+                    style={{
+                      border: 0,
+                      background: 'none',
+                      padding: 0,
+                      font: 'inherit',
+                      fontSize: '0.75rem',
+                      color: 'var(--color-text-secondary)',
+                      cursor: busy ? 'default' : 'pointer',
+                      textDecoration: 'underline dotted',
+                      textUnderlineOffset: '0.2em',
+                    }}
+                  >
+                    {value.swatchSize || 'size?'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  aria-label={`Delete ${value.label}`}
+                  disabled={busy}
+                  onClick={() => void send(`${base}/values/${value.id}`, 'DELETE')}
+                  style={{ border: 0, background: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)', padding: 0, lineHeight: 1 }}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {/* One control, not two. Every value is already in memory - the slice is
+                purely to keep six hundred chips off the screen - so paging through
+                them thirty at a time bought nothing but a second button that looked
+                like the first. It says how many there are, because "Show all" on its
+                own gives no idea whether the press unfolds ten or six hundred. */}
+            {hiddenValueCount > 0 && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setVisibleValues(attribute.values.length)}
+              >
+                Show all {attribute.values.length}
               </button>
             )}
-            <button
-              type="button"
-              aria-label={`Delete ${value.label}`}
-              disabled={busy}
-              onClick={() => void send(`${base}/values/${value.id}`, 'DELETE')}
-              style={{ border: 0, background: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)', padding: 0, lineHeight: 1 }}
-            >
-              ×
-            </button>
-          </span>
-        ))}
-        {/* One control, not two. Every value is already in memory - the slice is
-            purely to keep six hundred chips off the screen - so paging through
-            them thirty at a time bought nothing but a second button that looked
-            like the first. It says how many there are, because "Show all" on its
-            own gives no idea whether the press unfolds ten or six hundred. */}
-        {hiddenValueCount > 0 && (
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => setVisibleValues(attribute.values.length)}
-          >
-            Show all {attribute.values.length}
-          </button>
-        )}
-      </div>
+          </div>
 
-      <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-        <input
-          className="form-control"
-          style={{ flex: '1 1 12rem', minWidth: '8rem' }}
-          placeholder="Add a value, e.g. Oak - or (black-mfc)Black to set its slug"
-          value={newValue}
-          onChange={(e) => setNewValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void addValue() }}
-          aria-label={`New value for ${attribute.name}`}
-        />
-        {isSwatch && (
-          <input
-            type="color"
-            className="form-control"
-            style={{ flex: '0 0 3.5rem', padding: '0.125rem' }}
-            value={newSwatch}
-            onChange={(e) => setNewSwatch(e.target.value)}
-            aria-label={`Colour for the new ${attribute.name} value`}
-          />
-        )}
-        {isImage && (
-          <SwatchImagePicker
-            attributeId={attribute.id}
-            value={newImage}
-            label={`the new ${attribute.name} value`}
-            disabled={busy}
-            size={28}
-            onPick={(url) => setNewImage(url)}
-          />
-        )}
-        {/* Optional: how big the real material in that picture is. Anything drawing
-            the swatch at true scale - the 3D material configurator first among them -
-            reads this rather than guessing from the image. Left blank it simply goes
-            undrawn to scale, which is what every picture swatch did before. */}
-        {isImage && (
-          <input
-            className="form-control"
-            style={{ flex: '0 1 7rem', minWidth: '5rem' }}
-            placeholder="Size, e.g. 20cm"
-            value={newSwatchSize}
-            onChange={(e) => setNewSwatchSize(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void addValue() }}
-            aria-label={`Swatch size for the new ${attribute.name} value`}
-          />
-        )}
-        <button className="btn btn-secondary" disabled={busy || !newValue.trim()} onClick={() => void addValue()}>Add value</button>
-      </div>
+          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <input
+              className="form-control"
+              style={{ flex: '1 1 12rem', minWidth: '8rem' }}
+              placeholder="Add a value, e.g. Oak - or (black-mfc)Black to set its slug"
+              value={newValue}
+              onChange={(e) => setNewValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void addValue() }}
+              aria-label={`New value for ${attribute.name}`}
+            />
+            {isSwatch && (
+              <input
+                type="color"
+                className="form-control"
+                style={{ flex: '0 0 3.5rem', padding: '0.125rem' }}
+                value={newSwatch}
+                onChange={(e) => setNewSwatch(e.target.value)}
+                aria-label={`Colour for the new ${attribute.name} value`}
+              />
+            )}
+            {isImage && (
+              <SwatchImagePicker
+                attributeId={attribute.id}
+                value={newImage}
+                label={`the new ${attribute.name} value`}
+                disabled={busy}
+                size={28}
+                onPick={(url) => setNewImage(url)}
+              />
+            )}
+            {/* Optional: how big the real material in that picture is. Anything drawing
+                the swatch at true scale - the 3D material configurator first among them -
+                reads this rather than guessing from the image. Left blank it simply goes
+                undrawn to scale, which is what every picture swatch did before. */}
+            {isImage && (
+              <input
+                className="form-control"
+                style={{ flex: '0 1 7rem', minWidth: '5rem' }}
+                placeholder="Size, e.g. 20cm"
+                value={newSwatchSize}
+                onChange={(e) => setNewSwatchSize(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void addValue() }}
+                aria-label={`Swatch size for the new ${attribute.name} value`}
+              />
+            )}
+            <button className="btn btn-secondary" disabled={busy || !newValue.trim()} onClick={() => void addValue()}>Add value</button>
+          </div>
+        </>
+      )}
     </section>
   )
 }
