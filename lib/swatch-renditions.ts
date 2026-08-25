@@ -20,22 +20,36 @@ import {
 
 export type SwatchCopies = { small: string | null; tiny: string | null }
 
+/** Which copies a caller wants made. Both, unless it already has one. */
+export type SwatchCopyName = 'small' | 'tiny'
+
+const SIZES: Record<SwatchCopyName, number> = {
+  small: SWATCH_SMALL_MAX_PX,
+  tiny: SWATCH_TINY_MAX_PX,
+}
+
 /**
- * Make (or decline to make) both shrunk copies of the picture at `swatchUrl`.
+ * Make (or decline to make) shrunk copies of the picture at `swatchUrl`.
  *
- * Either may come back null, which is a fine answer - every renderer falls back
- * to the next size up - so callers store what they get. See the core helper for
- * when it declines: an external host, a format not worth shrinking, or a picture
- * already small enough that a copy would save nothing.
+ * `want` narrows it to the copies that are actually missing, which spares the
+ * download and the encode for one the value already has - the ordinary case for
+ * a shop whose swatches got their small copy under an earlier version. The rest
+ * come back null, which callers read as "leave what you had".
+ *
+ * Either may come back null anyway - an external host, a format not worth
+ * shrinking, a picture already small enough - and that is a fine answer, since
+ * every renderer falls back to the next size up.
  */
-export async function generateSwatchCopies(swatchUrl: string, userId?: string): Promise<SwatchCopies> {
+export async function generateSwatchCopies(
+  swatchUrl: string,
+  opts?: { want?: SwatchCopyName[]; userId?: string },
+): Promise<SwatchCopies> {
+  const want = opts?.want ?? (['small', 'tiny'] as SwatchCopyName[])
+  if (want.length === 0) return { small: null, tiny: null }
   const made = await generateImageRenditions(
     swatchUrl,
-    [
-      { maxPx: SWATCH_SMALL_MAX_PX, suffix: 'small' },
-      { maxPx: SWATCH_TINY_MAX_PX, suffix: 'tiny' },
-    ],
-    { worthwhileBytes: SWATCH_RENDITION_WORTHWHILE_BYTES, userId },
+    want.map((name) => ({ maxPx: SIZES[name], suffix: name })),
+    { worthwhileBytes: SWATCH_RENDITION_WORTHWHILE_BYTES, userId: opts?.userId },
   )
   return { small: made.small ?? null, tiny: made.tiny ?? null }
 }

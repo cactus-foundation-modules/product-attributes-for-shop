@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/db/prisma'
 import { requireShopUser } from '@/modules/shop/lib/access'
 import { updateAttributeValue } from '@/modules/product-attributes-for-shop/lib/db/attributes'
-import { generateSwatchCopies } from '@/modules/product-attributes-for-shop/lib/swatch-renditions'
+import { generateSwatchCopies, type SwatchCopyName } from '@/modules/product-attributes-for-shop/lib/swatch-renditions'
 import { syncSourcedOptionValues } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
 import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
 
@@ -49,43 +49,41 @@ export async function POST(request: Request) {
 
   let made = 0
   let skipped = 0
-  // Two values often share one picture (a colour reused across attributes), so
-  // copies already made for the same url - this batch or an earlier one - are
-  // reused rather than minted again.
-  const madeByUrl = new Map<string, { small: string | null; tiny: string | null }>()
+  // Several values routinely share one picture - a fabric offered under Colour
+  // and again under Upholstery - so what has been worked out for a url is reused
+  // across the batch rather than worked out per value.
+  const copiesByUrl = new Map<string, { small: string | null; tiny: string | null }>()
   for (const row of rows) {
     if (!isImageSwatch(row.swatch)) { skipped += 1; continue }
 
-    let copies = madeByUrl.get(row.swatch) ?? null
-    if (!copies) {
-      const sibling = await prisma.$queryRaw<{ swatch_small: string | null; swatch_tiny: string | null }[]>`
-        SELECT "swatch_small", "swatch_tiny" FROM "pat_attribute_values"
-        WHERE "swatch" = ${row.swatch} AND ("swatch_small" IS NOT NULL OR "swatch_tiny" IS NOT NULL)
-        LIMIT 1
+    // What any value already has for this picture, taken column by column rather
+    // than from whichever row turned up first. Reading one row was the bug: on a
+    // shop whose swatches had a small copy from an earlier version and no tiny,
+    // every sibling reported "has something", the tiny was minted again for each
+    // one, and the small was re-made and thrown away with it.
+    const known = copiesByUrl.get(row.swatch) ?? await (async () => {
+      const sibling = await prisma.$queryRaw<[{ small: string | null; tiny: string | null }]>`
+        SELECT MAX("swatch_small") AS small, MAX("swatch_tiny") AS tiny
+        FROM "pat_attribute_values" WHERE "swatch" = ${row.swatch}
       `
-      const found = sibling[0]
-      // A sibling only helps for the copies it actually has; anything still
-      // missing is minted below and shared onwards through madeByUrl.
-      if (found && found.swatch_small && found.swatch_tiny) {
-        copies = { small: found.swatch_small, tiny: found.swatch_tiny }
-      } else {
-        const fresh = await generateSwatchCopies(row.swatch)
-        copies = {
-          small: found?.swatch_small ?? fresh.small,
-          tiny: found?.swatch_tiny ?? fresh.tiny,
-        }
-      }
+      return { small: sibling[0]?.small ?? null, tiny: sibling[0]?.tiny ?? null }
+    })()
+
+    let small = row.swatch_small ?? known.small
+    let tiny = row.swatch_tiny ?? known.tiny
+    const want: SwatchCopyName[] = [...(small ? [] : ['small' as const]), ...(tiny ? [] : ['tiny' as const])]
+    if (want.length > 0) {
+      const fresh = await generateSwatchCopies(row.swatch, { want })
+      small = small ?? fresh.small
+      tiny = tiny ?? fresh.tiny
     }
+    copiesByUrl.set(row.swatch, { small, tiny })
 
-    const nextSmall = row.swatch_small ?? copies.small
-    const nextTiny = row.swatch_tiny ?? copies.tiny
-    if (nextSmall === row.swatch_small && nextTiny === row.swatch_tiny) { skipped += 1; continue }
-
-    madeByUrl.set(row.swatch, copies)
-    await updateAttributeValue(row.id, { swatchSmall: nextSmall, swatchTiny: nextTiny })
+    if (small === row.swatch_small && tiny === row.swatch_tiny) { skipped += 1; continue }
+    await updateAttributeValue(row.id, { swatchSmall: small, swatchTiny: tiny })
     // The variation copies are what the storefront actually reads, so each
     // freshly-made rendition goes straight out to them.
-    await syncSourcedOptionValues(row.id, { swatchSmall: nextSmall, swatchTiny: nextTiny })
+    await syncSourcedOptionValues(row.id, { swatchSmall: small, swatchTiny: tiny })
     made += 1
   }
 
