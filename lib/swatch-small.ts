@@ -2,6 +2,7 @@ import sharp from 'sharp'
 import { prisma } from '@/lib/db/prisma'
 import { downloadMedia, uploadMedia, buildLibraryUploadKey, saveMediaRecord } from '@/lib/media/upload'
 import { resolveFolderPath } from '@/lib/media/organise'
+import { SMALL_SWATCH_MAX_PX, SMALL_SWATCH_WORTHWHILE_BYTES } from '@/modules/product-attributes-for-shop/lib/types'
 
 // Makes the small rendition behind `swatch_small`: a shrunk webp copy of a
 // picture swatch, saved to the media library beside the original.
@@ -13,14 +14,13 @@ import { resolveFolderPath } from '@/lib/media/organise'
 // category of fabric-heavy products pulls megabytes to paint a row of dots.
 // Two files, two jobs: `swatch` stays the texture, `swatch_small` is the dot.
 
-// The small copy's longest edge. Sized for the biggest thing the storefront
-// draws from it - the 200px hover preview on the product page's picker - at a
-// 2x display, so it stays sharp everywhere it is actually shown.
-export const SMALL_SWATCH_MAX_PX = 400
-
-// Under this weight the original IS the small copy to any useful approximation,
-// and a duplicate file would be library clutter for no saved bandwidth.
-const WORTHWHILE_BYTES = 100_000
+// Both numbers now live in lib/types.ts, which the admin screen can import
+// without pulling sharp into the browser bundle. SMALL_SWATCH_MAX_PX is the
+// small copy's longest edge, sized for the biggest thing the storefront draws
+// from it - the 200px hover preview on the product page's picker - at a 2x
+// display. Under SMALL_SWATCH_WORTHWHILE_BYTES the original IS the small copy to
+// any useful approximation, and a duplicate file would be library clutter for no
+// saved bandwidth.
 
 // Formats sharp can be trusted to shrink well here. SVG scales by nature and
 // GIF may animate - shrinking either buys little or breaks something, so both
@@ -55,7 +55,7 @@ export async function generateSmallSwatch(swatchUrl: string, userId?: string): P
     // well as a copy would, and the fallback path shows it anyway.
     const meta = await sharp(original).metadata()
     const widest = Math.max(meta.width ?? 0, meta.height ?? 0)
-    if (widest <= SMALL_SWATCH_MAX_PX && original.length <= WORTHWHILE_BYTES) return null
+    if (widest <= SMALL_SWATCH_MAX_PX && original.length <= SMALL_SWATCH_WORTHWHILE_BYTES) return null
 
     // `rotate()` first so an EXIF-orientated photograph keeps pointing the way
     // it did in the picker rather than lying on its side in the small copy.

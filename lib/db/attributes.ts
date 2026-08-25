@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db/prisma'
 import { Prisma } from '@prisma/client'
-import type { PatAttribute, PatAttributeValue, PatAttributeWithValues, PatControlType } from '@/modules/product-attributes-for-shop/lib/types'
+import type { PatAttribute, PatAttributeValue, PatAttributeWithValues, PatControlType, PatSwatchFileInfo } from '@/modules/product-attributes-for-shop/lib/types'
 
 function mapAttribute(r: Record<string, unknown>): PatAttribute {
   return {
@@ -232,6 +232,30 @@ export async function listAttributeSwatches(attributeId: string): Promise<{ id: 
     WHERE "attribute_id" = ${attributeId} AND "swatch" IS NOT NULL
   `
   return rows.map((r) => ({ id: r.id, swatch: r.swatch, swatchSmall: r.swatch_small ?? null }))
+}
+
+// What the media library holds against a batch of picture-swatch urls: weight
+// and pixel size, for the admin screen to say what each rendition costs. One
+// query for the whole screen rather than one per thumbnail - an attribute like
+// Colour runs to several hundred values, each with two pictures.
+//
+// A url the library has never heard of - an external host, a site-relative path,
+// or a picture deleted since the value was saved - is simply absent from the
+// result. Callers read that as "size unknown", never as zero.
+export async function listSwatchFileInfo(urls: string[]): Promise<Record<string, PatSwatchFileInfo>> {
+  const wanted = [...new Set(urls)]
+  if (wanted.length === 0) return {}
+  const rows = await prisma.media.findMany({
+    where: { url: { in: wanted } },
+    select: { url: true, sizeBytes: true, width: true, height: true },
+  })
+  const out: Record<string, PatSwatchFileInfo> = {}
+  for (const row of rows) {
+    // Two library rows may legitimately name one url; first match wins, as
+    // everywhere else that reads the library by url.
+    if (!out[row.url]) out[row.url] = { bytes: row.sizeBytes, width: row.width, height: row.height }
+  }
+  return out
 }
 
 export async function listAttributeValues(attributeId: string): Promise<PatAttributeValue[]> {

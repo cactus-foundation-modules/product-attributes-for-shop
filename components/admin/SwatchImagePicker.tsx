@@ -18,7 +18,7 @@ const BASE = '/api/m/product-attributes-for-shop/admin'
 // hold: the library hands back a url or the admin cancels, and the pick itself
 // is the change. A value with no picture shows a dashed box, matching the dashed
 // dot an uncoloured swatch shows, and the storefront falls back to the label.
-export function SwatchImagePicker({ attributeId, value, previewUrl, label, onPick, disabled, size = 22 }: {
+export function SwatchImagePicker({ attributeId, value, previewUrl, label, onPick, disabled, size = 22, hoverText, highlight }: {
   attributeId: string
   value: string | null
   // A lighter url to DRAW in the box (the value's small rendition) while `value`
@@ -29,6 +29,14 @@ export function SwatchImagePicker({ attributeId, value, previewUrl, label, onPic
   onPick: (url: string) => void | Promise<void>
   disabled?: boolean
   size?: number
+  // What hovering says, when the caller knows more about this picture than "click
+  // to choose one" - what it weighs, and whether it is the rendition the
+  // storefront draws. Also becomes the accessible name, so the tooltip and the
+  // screen reader never tell different stories.
+  hoverText?: string
+  // Rings the box to mark it as the rendition product option swatches actually
+  // draw. Purely a marker: it changes nothing about what a pick does.
+  highlight?: boolean
 }) {
   const [picking, setPicking] = useState(false)
   const [working, setWorking] = useState(false)
@@ -95,8 +103,8 @@ export function SwatchImagePicker({ attributeId, value, previewUrl, label, onPic
     <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'flex-start' }}>
       <button
         type="button"
-        aria-label={value ? `Change the picture for ${label}, or drop an image here` : `Set a picture for ${label}, or drop an image here`}
-        title="Click to choose from the library, or drop an image here"
+        aria-label={hoverText ?? (value ? `Change the picture for ${label}, or drop an image here` : `Set a picture for ${label}, or drop an image here`)}
+        title={hoverText ?? 'Click to choose from the library, or drop an image here'}
         disabled={busy}
         onClick={() => setPicking(true)}
         onDragEnter={(e) => { if (!busy && isFileDrag(e)) { e.preventDefault(); setDragOver(true) } }}
@@ -112,13 +120,21 @@ export function SwatchImagePicker({ attributeId, value, previewUrl, label, onPic
           border: dragOver
             ? '2px solid var(--color-primary)'
             : value ? '1px solid var(--color-border)' : '1px dashed var(--color-text-secondary)',
+          // Outline rather than a thicker border: at 18px a 2px border would eat
+          // most of the picture it is meant to be pointing at.
+          outline: highlight && !dragOver ? '2px solid var(--color-primary)' : undefined,
+          outlineOffset: highlight && !dragOver ? 1 : undefined,
         }}
       >
         {working ? (
           <span aria-hidden style={{ fontSize: '0.625rem', lineHeight: 1, color: 'var(--color-text-secondary)' }}>…</span>
         ) : value ? (
+          // Lazily: a caller that draws the full-size original here (the
+          // attributes screen, showing both renditions) would otherwise pull
+          // every picture on a six-hundred-value attribute before the owner has
+          // scrolled to any of them.
           // eslint-disable-next-line @next/next/no-img-element -- media library URLs are arbitrary remote hosts, not a configured next/image loader
-          <img src={previewUrl ?? value} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+          <img src={previewUrl ?? value} alt="" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
         ) : (
           <span aria-hidden style={{ fontSize: '0.625rem', lineHeight: 1, color: dragOver ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}>＋</span>
         )}

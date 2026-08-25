@@ -36,6 +36,23 @@ export function isValidSwatch(value: string): boolean {
 // "uncalibrated", not invalid.
 export const SWATCH_SIZE_MAX_LENGTH = 40
 
+// The small rendition's longest edge, and the weight under which making a copy
+// would save nothing worth having. They live here rather than beside the resizer
+// in lib/swatch-small.ts because the attributes screen judges a picture against
+// both numbers to explain why a value has no small copy - and that screen runs
+// in the browser, where importing the resizer would drag sharp in with it.
+export const SMALL_SWATCH_MAX_PX = 400
+export const SMALL_SWATCH_WORTHWHILE_BYTES = 100_000
+
+// What the media library knows about one picture swatch's file. A url with no
+// entry in the map is one the library has never heard of - an external host, or
+// a site-relative path - which is shown as an unknown size rather than as zero.
+export type PatSwatchFileInfo = {
+  bytes: number
+  width: number | null
+  height: number | null
+}
+
 // A folder attributes can be sorted into. Admin-side organisation only - the
 // storefront filter never reads a group, which is why there is no
 // `showInFilters` here to go stale against the attribute's own.

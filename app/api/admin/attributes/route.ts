@@ -8,14 +8,26 @@ import {
   attributeNameTaken,
   ensureUniqueAttributeSlug,
   nextAttributePosition,
+  listSwatchFileInfo,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 import { getAttributeGroup } from '@/modules/product-attributes-for-shop/lib/db/groups'
+import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
 
 export async function GET() {
   const gate = await requireShopUser('shop.products', { allowAccess: true })
   if (gate.error) return gate.error
   const attributes = await listAttributes()
-  return NextResponse.json({ attributes })
+
+  // Both renditions of every picture swatch, weighed in one go, so the screen can
+  // say what each thumbnail costs without a request per picture. Hex colours have
+  // no file behind them and are filtered out by the same validator that decides
+  // whether the column holds a picture at all.
+  const swatchFiles = await listSwatchFileInfo(
+    attributes
+      .flatMap((a) => a.values.flatMap((v) => [v.swatch, v.swatchSmall ?? null]))
+      .filter((url): url is string => !!url && isImageSwatch(url)),
+  )
+  return NextResponse.json({ attributes, swatchFiles })
 }
 
 const PostBody = z.object({

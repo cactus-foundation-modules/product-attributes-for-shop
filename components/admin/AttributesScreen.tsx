@@ -1,9 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import type { PatAttributeGroup, PatAttributeWithValues, PatControlType } from '@/modules/product-attributes-for-shop/lib/types'
+import type { PatAttributeGroup, PatAttributeWithValues, PatControlType, PatSwatchFileInfo } from '@/modules/product-attributes-for-shop/lib/types'
 import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
 import { SwatchImagePicker } from '@/modules/product-attributes-for-shop/components/admin/SwatchImagePicker'
+import { SwatchRenditions } from '@/modules/product-attributes-for-shop/components/admin/SwatchRenditions'
 
 // How many values a card shows before it asks. An attribute like Colour can run
 // to several hundred, and drawing every chip up front buries the rest of the
@@ -23,6 +24,10 @@ const CONTROL_LABELS: Record<PatControlType, string> = {
 export function AttributesScreen() {
   const [attributes, setAttributes] = useState<PatAttributeWithValues[]>([])
   const [groups, setGroups] = useState<PatAttributeGroup[]>([])
+  // What each picture swatch weighs, keyed by url, weighed once for the whole
+  // screen by the attributes endpoint. Both renditions of a value are in here,
+  // and a url the media library has never heard of is simply absent.
+  const [swatchFiles, setSwatchFiles] = useState<Record<string, PatSwatchFileInfo>>({})
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
@@ -51,6 +56,7 @@ export function AttributesScreen() {
       const attrData = await attrRes.json()
       const groupData = await groupRes.json()
       setAttributes(attrData.attributes ?? [])
+      setSwatchFiles(attrData.swatchFiles ?? {})
       setGroups(groupData.groups ?? [])
     } catch {
       setError('Could not load attributes.')
@@ -323,6 +329,7 @@ export function AttributesScreen() {
                       key={attribute.id}
                       attribute={attribute}
                       groups={groups}
+                      swatchFiles={swatchFiles}
                       busy={busy}
                       send={send}
                       canMoveUp={itemIndex > 0}
@@ -444,6 +451,7 @@ function GroupHeader({
 function AttributeCard({
   attribute,
   groups,
+  swatchFiles,
   busy,
   send,
   canMoveUp,
@@ -452,6 +460,7 @@ function AttributeCard({
 }: {
   attribute: PatAttributeWithValues
   groups: PatAttributeGroup[]
+  swatchFiles: Record<string, PatSwatchFileInfo>
   busy: boolean
   send: (url: string, method: string, body?: unknown) => Promise<Record<string, unknown> | null>
   canMoveUp: boolean
@@ -699,15 +708,16 @@ function AttributeCard({
               ⠿
             </span>
             {isImage ? (
-              <SwatchImagePicker
+              // Both renditions, not one: which of the two the storefront draws
+              // on an option swatch, and what each of them weighs, is exactly
+              // what an owner comes to this screen to find out. Hovering either
+              // box says so in words; the ring marks the one in use.
+              <SwatchRenditions
                 attributeId={attribute.id}
-                value={value.swatch && isImageSwatch(value.swatch) ? value.swatch : null}
-                // The 18px chip draws the small copy where one exists: this
-                // screen lists every value of every attribute, and painting each
-                // chip with the full-size photograph is exactly the weight the
-                // small copies were made to shed.
-                previewUrl={value.swatchSmall ?? null}
                 label={value.label}
+                swatch={value.swatch}
+                swatchSmall={value.swatchSmall ?? null}
+                files={swatchFiles}
                 disabled={busy}
                 size={18}
                 onPick={(url) => onEditValue(value.id, value.label, { swatch: url })}
