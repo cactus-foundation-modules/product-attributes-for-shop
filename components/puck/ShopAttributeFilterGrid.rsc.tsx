@@ -51,8 +51,11 @@ async function renderTaggedCards(template: PuckData | null, items: CardItem[], m
         <>
           <div className="shop-card-img">
             {ctx.image && (
+              // Lazy, matching shop's own card part. A grid is the one place a
+              // card is drawn hundreds of times over, so the untemplated
+              // fallback cannot be the eager one.
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={ctx.image.url} alt={ctx.image.alt} />
+              <img src={ctx.image.url} alt={ctx.image.alt} loading="lazy" decoding="async" />
             )}
           </div>
           <h3 className="shop-card-name">{product.name}</h3>
