@@ -139,9 +139,10 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
 
   // Drop filter options nothing on this page can match, so a category page never
   // offers a tick that always returns nothing. Picture swatches are collapsed to
-  // their small rendition where one exists - a filter tile is 40-odd pixels, and
-  // the full-size photograph exists for the 3D module, not for this - with the
-  // original as the fallback, exactly what every value showed before smalls.
+  // the smallest rendition that exists - a filter dot is 14 pixels and a picture
+  // tile 56, so the tiny copy is the right one and the full-size photograph
+  // exists for the 3D module, not for this - falling back through the small copy
+  // to the original, exactly what every value showed before the copies existed.
   const filtered = settings.hideEmptyValues
     ? attributes
         .map((a) => ({ ...a, values: a.values.filter((v) => (counts.get(v.id) ?? 0) > 0) }))
@@ -149,7 +150,7 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
     : attributes
   const offered = filtered.map((a) => ({
     ...a,
-    values: a.values.map((v) => ({ ...v, swatch: v.swatchSmall ?? v.swatch })),
+    values: a.values.map((v) => ({ ...v, swatch: v.swatchTiny ?? v.swatchSmall ?? v.swatch })),
   }))
 
   return (

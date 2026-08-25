@@ -9,7 +9,7 @@ import {
   ensureUniqueValueSlug,
   nextValuePosition,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
-import { generateSmallSwatch } from '@/modules/product-attributes-for-shop/lib/swatch-small'
+import { generateSwatchCopies } from '@/modules/product-attributes-for-shop/lib/swatch-renditions'
 import { listAttributeGroups } from '@/modules/product-attributes-for-shop/lib/db/groups'
 import { slugify } from '@/modules/shop/lib/slug'
 import { fileSwatchImage } from '@/modules/product-attributes-for-shop/lib/media-folder'
@@ -31,13 +31,13 @@ import { isImageSwatch, isValidSwatch } from '@/modules/product-attributes-for-s
 // ability to come back later and re-read the attribute - which value is which
 // survives a rename, because the match is on id rather than label.
 
-type OptionSourceValue = { ref: string; label: string; slug: string | null; swatch: string | null; swatchSmall?: string | null }
+type OptionSourceValue = { ref: string; label: string; slug: string | null; swatch: string | null; swatchSmall?: string | null; swatchTiny?: string | null }
 type OptionSource = { ref: string; name: string; groupLabel?: string | null; values: OptionSourceValue[] }
 
 // A value with no label is not offerable - it would create a nameless option
 // value and, downstream, a nameless variant.
 function toSource(
-  attribute: { id: string; name: string; groupId: string | null; values: { id: string; label: string; slug: string; swatch: string | null; swatchSmall?: string | null }[] },
+  attribute: { id: string; name: string; groupId: string | null; values: { id: string; label: string; slug: string; swatch: string | null; swatchSmall?: string | null; swatchTiny?: string | null }[] },
   groupNames: Map<string, string>,
 ): OptionSource {
   return {
@@ -51,7 +51,7 @@ function toSource(
     // copy is what the storefront actually reads.
     values: attribute.values
       .filter((v) => v.label.trim().length > 0)
-      .map((v) => ({ ref: v.id, label: v.label, slug: v.slug, swatch: v.swatch, swatchSmall: v.swatchSmall ?? null })),
+      .map((v) => ({ ref: v.id, label: v.label, slug: v.slug, swatch: v.swatch, swatchSmall: v.swatchSmall ?? null, swatchTiny: v.swatchTiny ?? null })),
   }
 }
 
@@ -120,7 +120,7 @@ export const productAttributesOptionSourceProvider = {
     const existing = wantedSlug
       ? await findAttributeValueBySlug(ref, wantedSlug)
       : await findAttributeValueByLabel(ref, label)
-    if (existing) return { ref: existing.id, label: existing.label, slug: existing.slug, swatch: existing.swatch, swatchSmall: existing.swatchSmall ?? null }
+    if (existing) return { ref: existing.id, label: existing.label, slug: existing.slug, swatch: existing.swatch, swatchSmall: existing.swatchSmall ?? null, swatchTiny: existing.swatchTiny ?? null }
 
     // A swatch the attributes screen would refuse is dropped rather than stored:
     // this string ends up in an <img src>, and a value with no swatch is a far
@@ -135,15 +135,18 @@ export const productAttributesOptionSourceProvider = {
     // taken downstream would point at the pre-move url and 404.
     let stored = swatch
     let storedSmall: string | null = null
+    let storedTiny: string | null = null
     if (swatch && isImageSwatch(swatch)) {
       await fileSwatchImage(ref, created.id, swatch)
       stored = (await getAttributeValue(created.id))?.swatch ?? swatch
-      // The small rendition is made from the FILED url, so it lands in (and
-      // points at) the attribute's own folder from the start.
-      storedSmall = stored ? await generateSmallSwatch(stored) : null
-      if (storedSmall) await updateAttributeValue(created.id, { swatchSmall: storedSmall })
+      // The shrunk copies are made from the FILED url, so they land in (and
+      // point at) the attribute's own folder from the start.
+      const made = stored ? await generateSwatchCopies(stored) : { small: null, tiny: null }
+      storedSmall = made.small
+      storedTiny = made.tiny
+      if (storedSmall || storedTiny) await updateAttributeValue(created.id, { swatchSmall: storedSmall, swatchTiny: storedTiny })
     }
 
-    return { ref: created.id, label, slug, swatch: stored, swatchSmall: storedSmall }
+    return { ref: created.id, label, slug, swatch: stored, swatchSmall: storedSmall, swatchTiny: storedTiny }
   },
 }

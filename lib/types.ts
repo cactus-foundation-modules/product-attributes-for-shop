@@ -36,22 +36,16 @@ export function isValidSwatch(value: string): boolean {
 // "uncalibrated", not invalid.
 export const SWATCH_SIZE_MAX_LENGTH = 40
 
-// The small rendition's longest edge, and the weight under which making a copy
-// would save nothing worth having. They live here rather than beside the resizer
-// in lib/swatch-small.ts because the attributes screen judges a picture against
-// both numbers to explain why a value has no small copy - and that screen runs
-// in the browser, where importing the resizer would drag sharp in with it.
-export const SMALL_SWATCH_MAX_PX = 400
-export const SMALL_SWATCH_WORTHWHILE_BYTES = 100_000
-
-// What the media library knows about one picture swatch's file. A url with no
-// entry in the map is one the library has never heard of - an external host, or
-// a site-relative path - which is shown as an unknown size rather than as zero.
-export type PatSwatchFileInfo = {
-  bytes: number
-  width: number | null
-  height: number | null
-}
+// The rendition sizes, and what a screen says about them, are core's rather than
+// this module's: three modules keep picture swatches now (attributes, variations
+// and filters) and they must not tell an owner three different stories about the
+// same three files. Re-exported here so this module's own code keeps one import.
+export {
+  SWATCH_SMALL_MAX_PX,
+  SWATCH_TINY_MAX_PX,
+  SWATCH_RENDITION_WORTHWHILE_BYTES,
+} from '@/lib/media/swatch-renditions'
+export type { SwatchFileInfo as PatSwatchFileInfo } from '@/lib/media/swatch-renditions'
 
 // A folder attributes can be sorted into. Admin-side organisation only - the
 // storefront filter never reads a group, which is why there is no
@@ -84,12 +78,16 @@ export type PatAttributeValue = {
   label: string
   slug: string
   swatch: string | null
-  // The url of a small rendition of the picture above, for the storefront's
-  // thumbnails and chips - the original stays full-size for the 3D module to
-  // paint at true scale. Null (or absent, on payloads from before the column
-  // existed) means "no small copy": renderers fall back to `swatch`. Never a
-  // hex colour - a colour needs no shrinking.
+  // The url of a small rendition of the picture above, for the product page's
+  // option swatches and the big preview on hovering one - the original stays
+  // full-size for the 3D module to paint at true scale. Null (or absent, on
+  // payloads from before the column existed) means "no small copy": renderers
+  // fall back to `swatch`. Never a hex colour - a colour needs no shrinking.
   swatchSmall?: string | null
+  // The url of a tiny rendition, for the dots and little tiles on listings:
+  // category cards and the storefront filters. Null means "no tiny copy", and
+  // renderers fall back to `swatchSmall` and then to `swatch`.
+  swatchTiny?: string | null
   // The real-world size of the picture swatch above, as typed. Null on a value
   // with no picture, and on every value made before the field existed.
   swatchSize: string | null

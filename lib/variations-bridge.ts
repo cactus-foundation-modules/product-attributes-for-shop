@@ -45,26 +45,28 @@ export async function hasVariationsTables(): Promise<boolean> {
 // read to re-probe.
 export function resetVariationsProbeCache(): void {
   cached = null
-  smallColumnCached = null
+  delete copyColumnCached.swatch_small
+  delete copyColumnCached.swatch_tiny
 }
 
-let smallColumnCached: { value: boolean; at: number } | null = null
+const copyColumnCached: Partial<Record<'swatch_small' | 'swatch_tiny', { value: boolean; at: number }>> = {}
 
-// Whether the companion is new enough to hold a small swatch rendition per
-// option value (its migration 013: `swatch_small` on svr_option_values). Probed
-// separately from hasVariationsTables so an OLD companion still gets every sync
-// it always got - labels, swatches, slugs - and only the small copies wait for
-// it to catch up.
-async function hasOptionValueSmallColumn(): Promise<boolean> {
-  if (smallColumnCached && Date.now() - smallColumnCached.at < TTL_MS) return smallColumnCached.value
+// Whether the companion is new enough to hold a given shrunk swatch rendition
+// per option value (its migration 013 for `swatch_small`, 017 for `swatch_tiny`
+// on svr_option_values). Probed separately from hasVariationsTables so an OLD
+// companion still gets every sync it always got - labels, swatches, slugs - and
+// only the copies wait for it to catch up.
+async function hasOptionValueColumn(column: 'swatch_small' | 'swatch_tiny'): Promise<boolean> {
+  const cached = copyColumnCached[column]
+  if (cached && Date.now() - cached.at < TTL_MS) return cached.value
   const rows = await prisma.$queryRaw<[{ present: boolean }]>`
     SELECT EXISTS (
       SELECT 1 FROM information_schema.columns
-      WHERE "table_schema" = 'public' AND "table_name" = 'svr_option_values' AND "column_name" = 'swatch_small'
+      WHERE "table_schema" = 'public' AND "table_name" = 'svr_option_values' AND "column_name" = ${column}
     ) AS "present"
   `
   const value = Boolean(rows[0]?.present)
-  smallColumnCached = { value, at: Date.now() }
+  copyColumnCached[column] = { value, at: Date.now() }
   return value
 }
 
@@ -308,10 +310,10 @@ export type SourcedValueSyncResult = {
  */
 export async function syncSourcedOptionValues(
   valueId: string,
-  fields: { label?: string; swatch?: string | null; swatchSmall?: string | null; slug?: string },
+  fields: { label?: string; swatch?: string | null; swatchSmall?: string | null; swatchTiny?: string | null; slug?: string },
 ): Promise<SourcedValueSyncResult> {
-  const { label, swatch, swatchSmall, slug } = fields
-  if (label === undefined && swatch === undefined && swatchSmall === undefined && slug === undefined) return { updated: 0, blocked: [], variantsRenamed: 0 }
+  const { label, swatch, swatchSmall, swatchTiny, slug } = fields
+  if (label === undefined && swatch === undefined && swatchSmall === undefined && swatchTiny === undefined && slug === undefined) return { updated: 0, blocked: [], variantsRenamed: 0 }
   if (!(await hasVariationsTables())) return { updated: 0, blocked: [], variantsRenamed: 0 }
 
   // The copies, and the products they sit on. Read up front so the swatch and
@@ -348,11 +350,11 @@ export async function syncSourcedOptionValues(
     if (rows > 0) for (const copy of copies) touched.add(copy.product_id)
   }
 
-  // The small rendition follows the same everyone-takes-it rule as the swatch.
+  // The shrunk copies follow the same everyone-takes-it rule as the swatch.
   // Skipped silently against a companion too old to hold one: the copies there
-  // fall back to the full-size swatch, which is exactly what they showed before
-  // small copies existed.
-  if (swatchSmall !== undefined && (await hasOptionValueSmallColumn())) {
+  // fall back to the next size up, which is exactly what they showed before the
+  // rendition existed.
+  if (swatchSmall !== undefined && (await hasOptionValueColumn('swatch_small'))) {
     const rows = await prisma.$executeRaw`
       UPDATE "svr_option_values" ov
       SET "swatch_small" = ${swatchSmall}
@@ -361,6 +363,19 @@ export async function syncSourcedOptionValues(
           SELECT o."id" FROM "svr_options" o WHERE o."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
         )
         AND ov."swatch_small" IS DISTINCT FROM ${swatchSmall}
+    `
+    updated += rows
+  }
+
+  if (swatchTiny !== undefined && (await hasOptionValueColumn('swatch_tiny'))) {
+    const rows = await prisma.$executeRaw`
+      UPDATE "svr_option_values" ov
+      SET "swatch_tiny" = ${swatchTiny}
+      WHERE ov."source_ref" = ${valueId}
+        AND ov."option_id" IN (
+          SELECT o."id" FROM "svr_options" o WHERE o."source_provider" = ${OPTION_SOURCE_PROVIDER_ID}
+        )
+        AND ov."swatch_tiny" IS DISTINCT FROM ${swatchTiny}
     `
     updated += rows
   }

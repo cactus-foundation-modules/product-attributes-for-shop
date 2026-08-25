@@ -18,7 +18,7 @@ const BASE = '/api/m/product-attributes-for-shop/admin'
 // hold: the library hands back a url or the admin cancels, and the pick itself
 // is the change. A value with no picture shows a dashed box, matching the dashed
 // dot an uncoloured swatch shows, and the storefront falls back to the label.
-export function SwatchImagePicker({ attributeId, value, previewUrl, label, onPick, disabled, size = 22, hoverText, highlight }: {
+export function SwatchImagePicker({ attributeId, value, previewUrl, label, onPick, disabled, size = 22, hoverText, highlight, nativeTitle = true }: {
   attributeId: string
   value: string | null
   // A lighter url to DRAW in the box (the value's small rendition) while `value`
@@ -37,6 +37,10 @@ export function SwatchImagePicker({ attributeId, value, previewUrl, label, onPic
   // Rings the box to mark it as the rendition product option swatches actually
   // draw. Purely a marker: it changes nothing about what a pick does.
   highlight?: boolean
+  // Off where the caller has wrapped the box in the admin's own tooltip, which
+  // says the same thing better and at once. Leaving both on gives the owner two
+  // tooltips a second apart, one of them in the browser's font.
+  nativeTitle?: boolean
 }) {
   const [picking, setPicking] = useState(false)
   const [working, setWorking] = useState(false)
@@ -104,7 +108,7 @@ export function SwatchImagePicker({ attributeId, value, previewUrl, label, onPic
       <button
         type="button"
         aria-label={hoverText ?? (value ? `Change the picture for ${label}, or drop an image here` : `Set a picture for ${label}, or drop an image here`)}
-        title={hoverText ?? 'Click to choose from the library, or drop an image here'}
+        title={nativeTitle ? hoverText ?? 'Click to choose from the library, or drop an image here' : undefined}
         disabled={busy}
         onClick={() => setPicking(true)}
         onDragEnter={(e) => { if (!busy && isFileDrag(e)) { e.preventDefault(); setDragOver(true) } }}

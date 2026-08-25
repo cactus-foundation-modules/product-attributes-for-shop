@@ -10,7 +10,7 @@ import {
   ensureUniqueValueSlug,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 import { fileSwatchImage } from '@/modules/product-attributes-for-shop/lib/media-folder'
-import { generateSmallSwatch } from '@/modules/product-attributes-for-shop/lib/swatch-small'
+import { generateSwatchCopies } from '@/modules/product-attributes-for-shop/lib/swatch-renditions'
 import { syncSourcedOptionValues } from '@/modules/product-attributes-for-shop/lib/variations-bridge'
 import { isImageSwatch, isValidSwatch, SWATCH_MAX_LENGTH, SWATCH_SIZE_MAX_LENGTH } from '@/modules/product-attributes-for-shop/lib/types'
 
@@ -89,19 +89,28 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     }
   }
 
-  // The small rendition lives and dies with the picture it was made from: a new
-  // picture gets a fresh one, a hex colour or a cleared swatch gets none, and a
-  // re-pick of the same picture keeps the one it has rather than minting a
-  // duplicate file per save. Made from the FILED url so it lands in the
+  // The shrunk copies live and die with the picture they were made from: a new
+  // picture gets fresh ones, a hex colour or a cleared swatch gets none, and a
+  // re-pick of the same picture keeps the ones it has rather than minting
+  // duplicate files per save. Made from the FILED url so they land in the
   // attribute's own folder.
   let swatchSmall: string | null | undefined
+  let swatchTiny: string | null | undefined
   if (parsed.data.swatch !== undefined) {
     const unchanged = previous && previous.swatch === (swatch ?? null)
-    swatchSmall = unchanged
-      ? previous.swatchSmall ?? null
-      : swatch && isImageSwatch(swatch) ? await generateSmallSwatch(swatch) : null
-    if ((previous?.swatchSmall ?? null) !== swatchSmall) {
-      await updateAttributeValue(id, { swatchSmall })
+    if (unchanged) {
+      swatchSmall = previous.swatchSmall ?? null
+      swatchTiny = previous.swatchTiny ?? null
+    } else if (swatch && isImageSwatch(swatch)) {
+      const made = await generateSwatchCopies(swatch)
+      swatchSmall = made.small
+      swatchTiny = made.tiny
+    } else {
+      swatchSmall = null
+      swatchTiny = null
+    }
+    if ((previous?.swatchSmall ?? null) !== swatchSmall || (previous?.swatchTiny ?? null) !== swatchTiny) {
+      await updateAttributeValue(id, { swatchSmall, swatchTiny })
     }
   }
 
@@ -115,6 +124,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     ...(label !== undefined ? { label } : {}),
     ...(parsed.data.swatch !== undefined ? { swatch } : {}),
     ...(swatchSmall !== undefined ? { swatchSmall } : {}),
+    ...(swatchTiny !== undefined ? { swatchTiny } : {}),
     ...(slug !== undefined ? { slug } : {}),
   })
 

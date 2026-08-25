@@ -18,13 +18,13 @@ export async function GET() {
   if (gate.error) return gate.error
   const attributes = await listAttributes()
 
-  // Both renditions of every picture swatch, weighed in one go, so the screen can
-  // say what each thumbnail costs without a request per picture. Hex colours have
-  // no file behind them and are filtered out by the same validator that decides
-  // whether the column holds a picture at all.
+  // All three renditions of every picture swatch, weighed in one go, so the
+  // screen can say what each thumbnail costs without a request per picture. Hex
+  // colours have no file behind them and are filtered out by the same validator
+  // that decides whether the column holds a picture at all.
   const swatchFiles = await listSwatchFileInfo(
     attributes
-      .flatMap((a) => a.values.flatMap((v) => [v.swatch, v.swatchSmall ?? null]))
+      .flatMap((a) => a.values.flatMap((v) => [v.swatch, v.swatchSmall ?? null, v.swatchTiny ?? null]))
       .filter((url): url is string => !!url && isImageSwatch(url)),
   )
   return NextResponse.json({ attributes, swatchFiles })

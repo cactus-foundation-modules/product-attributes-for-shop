@@ -83,7 +83,7 @@ export async function findAttributeFolderId(attributeId: string): Promise<string
  * uses colours. Moving may rewrite the url (the library keys blobs by folder),
  * so the value's `swatch` is updated to match.
  */
-export async function fileSwatchImage(attributeId: string, valueId: string, swatchUrl: string, smallUrl?: string | null): Promise<void> {
+export async function fileSwatchImage(attributeId: string, valueId: string, swatchUrl: string, smallUrl?: string | null, tinyUrl?: string | null): Promise<void> {
   const media = await prisma.media.findFirst({ where: { url: swatchUrl }, select: { id: true } })
   if (!media) return
 
@@ -107,19 +107,33 @@ export async function fileSwatchImage(attributeId: string, valueId: string, swat
     console.warn(`[product-attributes-for-shop] could not file swatch image ${swatchUrl} for attribute ${attributeId}:`, err)
   }
 
-  // The small rendition is its own file and moves with the original, or the
-  // folder holds half a pair. Same shrug on failure, one picture at a time.
-  if (!smallUrl) return
-  const smallMedia = await prisma.media.findFirst({ where: { url: smallUrl }, select: { id: true } })
-  if (!smallMedia) return
+  // Each shrunk copy is its own file and moves with the original, or the folder
+  // holds part of a set. Same shrug on failure, one picture at a time.
+  await fileSwatchCopy(attributeId, valueId, folderId, 'swatchSmall', smallUrl)
+  await fileSwatchCopy(attributeId, valueId, folderId, 'swatchTiny', tinyUrl)
+}
+
+// One shrunk copy, moved into the attribute's folder and repointed - in the
+// value and in every variation option built from it. Split out because the small
+// and tiny copies want exactly the same treatment and neither may fail the save.
+async function fileSwatchCopy(
+  attributeId: string,
+  valueId: string,
+  folderId: string | null,
+  field: 'swatchSmall' | 'swatchTiny',
+  url: string | null | undefined,
+): Promise<void> {
+  if (!url) return
+  const media = await prisma.media.findFirst({ where: { url }, select: { id: true } })
+  if (!media) return
   try {
-    const movedSmall = await moveOrRenameMedia(smallMedia.id, { targetFolderId: folderId, collision: 'suffix' })
-    if (movedSmall && movedSmall.url !== smallUrl) {
-      await updateAttributeValue(valueId, { swatchSmall: movedSmall.url })
-      await syncSourcedOptionValues(valueId, { swatchSmall: movedSmall.url })
+    const moved = await moveOrRenameMedia(media.id, { targetFolderId: folderId, collision: 'suffix' })
+    if (moved && moved.url !== url) {
+      await updateAttributeValue(valueId, { [field]: moved.url })
+      await syncSourcedOptionValues(valueId, { [field]: moved.url })
     }
   } catch (err) {
-    console.warn(`[product-attributes-for-shop] could not file small swatch image ${smallUrl} for attribute ${attributeId}:`, err)
+    console.warn(`[product-attributes-for-shop] could not file ${field} swatch image ${url} for attribute ${attributeId}:`, err)
   }
 }
 
@@ -142,7 +156,7 @@ export async function refileAttributeSwatches(attributeId: string): Promise<void
   const values = await listAttributeSwatches(attributeId)
   for (const value of values) {
     if (!isImageSwatch(value.swatch)) continue
-    await fileSwatchImage(attributeId, value.id, value.swatch, value.swatchSmall)
+    await fileSwatchImage(attributeId, value.id, value.swatch, value.swatchSmall, value.swatchTiny)
   }
 }
 

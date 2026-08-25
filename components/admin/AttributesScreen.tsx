@@ -41,7 +41,7 @@ export function AttributesScreen() {
   const [tidied, setTidied] = useState<string | null>(null)
   // The small-copies backfill narrates itself here: batches take a while, and a
   // button that sits silent for a minute reads as broken.
-  const [smallProgress, setSmallProgress] = useState<string | null>(null)
+  const [copyProgress, setCopyProgress] = useState<string | null>(null)
 
   // Falls back to "No group" if the chosen folder has since been deleted, so the
   // picker never shows one thing while the Add button sends another.
@@ -128,16 +128,16 @@ export function AttributesScreen() {
   // goes. Plain fetches rather than send(): reloading the whole screen after
   // every batch of eight would make a long backfill feel broken, so the list is
   // refreshed once at the end instead.
-  async function makeSmallCopies() {
+  async function makeSwatchCopies() {
     setBusy(true)
     setError(null)
-    setSmallProgress('Working…')
+    setCopyProgress('Working…')
     let afterId: string | undefined
     let made = 0
     let skipped = 0
     try {
       for (;;) {
-        const res = await fetch('/api/m/product-attributes-for-shop/admin/generate-small-swatches', {
+        const res = await fetch('/api/m/product-attributes-for-shop/admin/generate-swatch-copies', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(afterId ? { afterId } : {}),
@@ -145,25 +145,25 @@ export function AttributesScreen() {
         if (!res.ok) {
           const data = await res.json().catch(() => ({}))
           setError(data.error ?? 'Something went wrong.')
-          setSmallProgress(null)
+          setCopyProgress(null)
           return
         }
         const data = (await res.json()) as { made: number; skipped: number; lastId?: string; remaining: number; done: boolean }
         made += data.made
         skipped += data.skipped
-        setSmallProgress(`${made} made so far - ${data.remaining} still to look at…`)
+        setCopyProgress(`${made} made so far - ${data.remaining} still to look at…`)
         if (data.done) break
         afterId = data.lastId
       }
-      setSmallProgress(
+      setCopyProgress(
         made === 0 && skipped === 0
-          ? 'Nothing needed one - every picture swatch already has its small copy.'
-          : `Done - ${made} small ${made === 1 ? 'copy' : 'copies'} made${skipped > 0 ? `, ${skipped} left as they were` : ''}.`,
+          ? 'Nothing needed one - every picture swatch already has both its copies.'
+          : `Done - copies made for ${made} ${made === 1 ? 'swatch' : 'swatches'}${skipped > 0 ? `, ${skipped} left as they were` : ''}.`,
       )
       await load()
     } catch {
       setError('Something went wrong.')
-      setSmallProgress(null)
+      setCopyProgress(null)
     } finally {
       setBusy(false)
     }
@@ -291,16 +291,17 @@ export function AttributesScreen() {
       </section>
 
       <section style={{ border: '1px solid var(--color-border)', borderRadius: 12, padding: '1rem 1.25rem', background: 'var(--color-surface)', marginBottom: '1.5rem' }}>
-        <h2 style={{ fontSize: '0.9375rem', margin: '0 0 0.75rem' }}>Small copies for the shop</h2>
+        <h2 style={{ fontSize: '0.9375rem', margin: '0 0 0.75rem' }}>Smaller copies for the shop</h2>
         <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
-          Makes a small copy of each picture swatch for the shop&apos;s thumbnails and category pages,
-          so shoppers stop downloading the full-size photographs just to see the little dots. The
-          originals stay put for anything that needs them at full size, like the 3D views. New
-          pictures get their small copy on upload; this catches up the ones from before. Safe to
-          press any time.
+          Makes two smaller copies of each picture swatch: a small one for the product page, where a
+          swatch grows when a shopper hovers it, and a tiny one for the dots on category pages and in
+          the filters. Between them they stop shoppers downloading full-size fabric photographs just
+          to see a row of little circles. The originals stay put for anything that needs them at full
+          size, like the 3D views. New pictures get their copies on upload; this catches up the ones
+          from before, including swatches that only got the small copy. Safe to press any time.
         </p>
-        <button className="btn btn-secondary" disabled={busy} onClick={() => void makeSmallCopies()}>Make small copies</button>
-        {smallProgress && <span style={{ marginLeft: '0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }} role="status">{smallProgress}</span>}
+        <button className="btn btn-secondary" disabled={busy} onClick={() => void makeSwatchCopies()}>Make copies</button>
+        {copyProgress && <span style={{ marginLeft: '0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }} role="status">{copyProgress}</span>}
       </section>
 
       {!loaded ? null : attributes.length === 0 && groups.length === 0 ? (
@@ -708,15 +709,17 @@ function AttributeCard({
               ⠿
             </span>
             {isImage ? (
-              // Both renditions, not one: which of the two the storefront draws
-              // on an option swatch, and what each of them weighs, is exactly
-              // what an owner comes to this screen to find out. Hovering either
-              // box says so in words; the ring marks the one in use.
+              // All three renditions, not one: which of them the storefront
+              // draws where, and what each of them weighs, is exactly what an
+              // owner comes to this screen to find out. Hovering any box says so
+              // in words - including an empty one, which says which copy would go
+              // there - and the ring marks the ones in use.
               <SwatchRenditions
                 attributeId={attribute.id}
                 label={value.label}
                 swatch={value.swatch}
                 swatchSmall={value.swatchSmall ?? null}
+                swatchTiny={value.swatchTiny ?? null}
                 files={swatchFiles}
                 disabled={busy}
                 size={18}

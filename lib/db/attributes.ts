@@ -23,6 +23,7 @@ function mapValue(r: Record<string, unknown>): PatAttributeValue {
     slug: r.slug as string,
     swatch: (r.swatch as string | null) ?? null,
     swatchSmall: (r.swatch_small as string | null) ?? null,
+    swatchTiny: (r.swatch_tiny as string | null) ?? null,
     swatchSize: (r.swatch_size as string | null) ?? null,
     position: r.position as number,
   }
@@ -180,12 +181,13 @@ export async function createAttributeValue(fields: {
   slug: string
   swatch: string | null
   swatchSmall?: string | null
+  swatchTiny?: string | null
   swatchSize?: string | null
   position: number
 }): Promise<{ id: string }> {
   const rows = await prisma.$queryRaw<[{ id: string }]>`
-    INSERT INTO "pat_attribute_values" ("attribute_id", "label", "slug", "swatch", "swatch_small", "swatch_size", "position")
-    VALUES (${fields.attributeId}, ${fields.label}, ${fields.slug}, ${fields.swatch}, ${fields.swatchSmall ?? null}, ${fields.swatchSize ?? null}, ${fields.position})
+    INSERT INTO "pat_attribute_values" ("attribute_id", "label", "slug", "swatch", "swatch_small", "swatch_tiny", "swatch_size", "position")
+    VALUES (${fields.attributeId}, ${fields.label}, ${fields.slug}, ${fields.swatch}, ${fields.swatchSmall ?? null}, ${fields.swatchTiny ?? null}, ${fields.swatchSize ?? null}, ${fields.position})
     RETURNING "id"
   `
   return rows[0]
@@ -193,15 +195,16 @@ export async function createAttributeValue(fields: {
 
 export async function updateAttributeValue(
   id: string,
-  fields: { label?: string; slug?: string; swatch?: string | null; swatchSmall?: string | null; swatchSize?: string | null; position?: number },
+  fields: { label?: string; slug?: string; swatch?: string | null; swatchSmall?: string | null; swatchTiny?: string | null; swatchSize?: string | null; position?: number },
 ): Promise<void> {
   const sets: Prisma.Sql[] = []
   if (fields.label !== undefined) sets.push(Prisma.sql`"label" = ${fields.label}`)
   if (fields.slug !== undefined) sets.push(Prisma.sql`"slug" = ${fields.slug}`)
   if (fields.swatch !== undefined) sets.push(Prisma.sql`"swatch" = ${fields.swatch}`)
-  // Null clears a small copy whose original has been replaced or removed - a
-  // stale small showing the OLD picture is worse than none - so `!== undefined`.
+  // Null clears a copy whose original has been replaced or removed - a stale
+  // copy showing the OLD picture is worse than none - so `!== undefined`.
   if (fields.swatchSmall !== undefined) sets.push(Prisma.sql`"swatch_small" = ${fields.swatchSmall}`)
+  if (fields.swatchTiny !== undefined) sets.push(Prisma.sql`"swatch_tiny" = ${fields.swatchTiny}`)
   // Explicit null clears a size that was set by mistake, so `!== undefined` again
   // rather than a truthiness check.
   if (fields.swatchSize !== undefined) sets.push(Prisma.sql`"swatch_size" = ${fields.swatchSize}`)
@@ -224,20 +227,20 @@ export async function getAttributeValue(id: string): Promise<PatAttributeValue |
 // Every value of an attribute that carries a swatch of any kind. The re-filer
 // uses this to walk an attribute's pictures when it changes folder; hex colours
 // come back too and are skipped there, because deciding what is a picture is the
-// validator's job (`isImageSwatch`), not a LIKE pattern's. The small rendition
-// rides along so the re-filer moves the pair together.
-export async function listAttributeSwatches(attributeId: string): Promise<{ id: string; swatch: string; swatchSmall: string | null }[]> {
-  const rows = await prisma.$queryRaw<{ id: string; swatch: string; swatch_small: string | null }[]>`
-    SELECT "id", "swatch", "swatch_small" FROM "pat_attribute_values"
+// validator's job (`isImageSwatch`), not a LIKE pattern's. Both shrunk copies
+// ride along so the re-filer moves the whole set together.
+export async function listAttributeSwatches(attributeId: string): Promise<{ id: string; swatch: string; swatchSmall: string | null; swatchTiny: string | null }[]> {
+  const rows = await prisma.$queryRaw<{ id: string; swatch: string; swatch_small: string | null; swatch_tiny: string | null }[]>`
+    SELECT "id", "swatch", "swatch_small", "swatch_tiny" FROM "pat_attribute_values"
     WHERE "attribute_id" = ${attributeId} AND "swatch" IS NOT NULL
   `
-  return rows.map((r) => ({ id: r.id, swatch: r.swatch, swatchSmall: r.swatch_small ?? null }))
+  return rows.map((r) => ({ id: r.id, swatch: r.swatch, swatchSmall: r.swatch_small ?? null, swatchTiny: r.swatch_tiny ?? null }))
 }
 
 // What the media library holds against a batch of picture-swatch urls: weight
 // and pixel size, for the admin screen to say what each rendition costs. One
 // query for the whole screen rather than one per thumbnail - an attribute like
-// Colour runs to several hundred values, each with two pictures.
+// Colour runs to several hundred values, each with three pictures.
 //
 // A url the library has never heard of - an external host, a site-relative path,
 // or a picture deleted since the value was saved - is simply absent from the

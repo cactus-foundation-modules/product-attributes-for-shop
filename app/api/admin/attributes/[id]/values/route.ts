@@ -13,7 +13,7 @@ import {
   nextValuePosition,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 import { fileSwatchImage } from '@/modules/product-attributes-for-shop/lib/media-folder'
-import { generateSmallSwatch } from '@/modules/product-attributes-for-shop/lib/swatch-small'
+import { generateSwatchCopies } from '@/modules/product-attributes-for-shop/lib/swatch-renditions'
 import { isImageSwatch, isValidSwatch, SWATCH_MAX_LENGTH, SWATCH_SIZE_MAX_LENGTH } from '@/modules/product-attributes-for-shop/lib/types'
 
 const PostBody = z.object({
@@ -80,20 +80,24 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   // the editor would show the pre-move url and 404 until the next reload.
   let stored = swatch
   let storedSmall: string | null = null
+  let storedTiny: string | null = null
   if (swatch && isImageSwatch(swatch)) {
     await fileSwatchImage(id, created.id, swatch)
     stored = (await getAttributeValue(created.id))?.swatch ?? swatch
-    // The small rendition the storefront's thumbnails prefer, made from the
-    // FILED url so it lands in the attribute's own folder. Null (an external
-    // host, a tiny original) just means renderers keep using the original.
-    storedSmall = stored ? await generateSmallSwatch(stored) : null
-    if (storedSmall) await updateAttributeValue(created.id, { swatchSmall: storedSmall })
+    // The shrunk copies the storefront prefers - 400px for the product page,
+    // 128px for listings - made from the FILED url so they land in the
+    // attribute's own folder. Null (an external host, an already-small original)
+    // just means renderers keep using the next size up.
+    const made = stored ? await generateSwatchCopies(stored) : { small: null, tiny: null }
+    storedSmall = made.small
+    storedTiny = made.tiny
+    if (storedSmall || storedTiny) await updateAttributeValue(created.id, { swatchSmall: storedSmall, swatchTiny: storedTiny })
   }
 
   return NextResponse.json({
     id: created.id,
     slug,
-    value: { id: created.id, attributeId: id, label, slug, swatch: stored, swatchSmall: storedSmall, swatchSize, position },
+    value: { id: created.id, attributeId: id, label, slug, swatch: stored, swatchSmall: storedSmall, swatchTiny: storedTiny, swatchSize, position },
     reused: false,
   })
 }

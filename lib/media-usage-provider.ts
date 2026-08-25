@@ -15,6 +15,8 @@ export async function productAttributesMediaUsageProvider(): Promise<string[]> {
     SELECT "swatch" AS ref FROM "pat_attribute_values" WHERE "swatch" IS NOT NULL
     UNION ALL
     SELECT "swatch_small" AS ref FROM "pat_attribute_values" WHERE "swatch_small" IS NOT NULL
+    UNION ALL
+    SELECT "swatch_tiny" AS ref FROM "pat_attribute_values" WHERE "swatch_tiny" IS NOT NULL
   `
   return rows.map((r) => r.ref).filter((r): r is string => !!r)
 }

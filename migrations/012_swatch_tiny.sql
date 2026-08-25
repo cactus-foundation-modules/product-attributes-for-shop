@@ -1,0 +1,18 @@
+-- Adds a third rendition of a picture swatch: the tiny one.
+--
+-- 010 added `swatch_small`, a 400px copy, and it fixed the product page - which
+-- draws a 200px preview when a shopper hovers an option, so 400px is exactly
+-- what that surface needs at a 2x display.
+--
+-- It did not fix the category page, which draws the same picture as an 18px chip
+-- on a card and a 14px dot in the filter list. A 400px fabric photograph weighs
+-- about 50 KB, and a category of two dozen colours pulled well over a megabyte
+-- of them to paint some dots.
+--
+-- `swatch_tiny` holds the url of a 128px copy - enough for the biggest little
+-- thing on a listing, a 56px picture-swatch filter tile at 2x - and weighs a few
+-- KB. Listings prefer it, falling back to `swatch_small` and then to `swatch`;
+-- the product page keeps preferring `swatch_small`, and the 3D module keeps
+-- reading `swatch` and never sees either. TEXT for the same reason the other two
+-- are TEXT: it is a url, and the url is the whole fact.
+ALTER TABLE "pat_attribute_values" ADD COLUMN IF NOT EXISTS "swatch_tiny" TEXT;
