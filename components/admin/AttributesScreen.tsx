@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { PatAttributeGroup, PatAttributeWithValues, PatControlType, PatSwatchFileInfo } from '@/modules/product-attributes-for-shop/lib/types'
 import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
+import { useAdminPath } from '@/components/admin/AdminPathContext'
 import { SwatchImagePicker } from '@/modules/product-attributes-for-shop/components/admin/SwatchImagePicker'
 import { SwatchRenditions } from '@/modules/product-attributes-for-shop/components/admin/SwatchRenditions'
 
@@ -486,6 +487,7 @@ function AttributeCard({
   // and with a screen's worth of attributes drawn open the one being looked for
   // was several pages down. Kept per card, so opening Colour leaves the rest shut.
   const [expanded, setExpanded] = useState(false)
+  const adminPath = useAdminPath()
   const base = '/api/m/product-attributes-for-shop/admin'
   const isSwatch = attribute.controlType === 'SWATCH'
   const isImage = attribute.controlType === 'IMAGE'
@@ -858,6 +860,34 @@ function AttributeCard({
                     {value.swatchSize || 'size?'}
                   </button>
                 )}
+                {/* Which products hang off this value, in a tab of its own so the
+                    list can be read beside the chips rather than instead of them.
+                    A vocabulary that has drifted into two near-identical values is
+                    only safe to tidy once you can see what each one is holding up. */}
+                <a
+                  href={`/${adminPath}/m/product-attributes-for-shop/values/${value.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={`Which products use ${value.label}`}
+                  title="Which products use this value"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 14,
+                    height: 14,
+                    borderRadius: 999,
+                    border: '1px solid var(--color-border)',
+                    color: 'var(--color-text-secondary)',
+                    fontSize: '0.625rem',
+                    fontStyle: 'italic',
+                    fontWeight: 600,
+                    lineHeight: 1,
+                    textDecoration: 'none',
+                  }}
+                >
+                  i
+                </a>
                 <button
                   type="button"
                   aria-label={`Delete ${value.label}`}
