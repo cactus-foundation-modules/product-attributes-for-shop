@@ -29,6 +29,9 @@ export function AttributesScreen() {
   // screen by the attributes endpoint. Both renditions of a value are in here,
   // and a url the media library has never heard of is simply absent.
   const [swatchFiles, setSwatchFiles] = useState<Record<string, PatSwatchFileInfo>>({})
+  // Value id -> how many products use it, weighed by the same endpoint. A value
+  // nothing uses is simply absent, which is what makes the fallback of 0 right.
+  const [valueCounts, setValueCounts] = useState<Record<string, number>>({})
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
@@ -58,6 +61,7 @@ export function AttributesScreen() {
       const groupData = await groupRes.json()
       setAttributes(attrData.attributes ?? [])
       setSwatchFiles(attrData.swatchFiles ?? {})
+      setValueCounts(attrData.valueProductCounts ?? {})
       setGroups(groupData.groups ?? [])
     } catch {
       setError('Could not load attributes.')
@@ -332,6 +336,7 @@ export function AttributesScreen() {
                       attribute={attribute}
                       groups={groups}
                       swatchFiles={swatchFiles}
+                      valueCounts={valueCounts}
                       busy={busy}
                       send={send}
                       canMoveUp={itemIndex > 0}
@@ -454,6 +459,7 @@ function AttributeCard({
   attribute,
   groups,
   swatchFiles,
+  valueCounts,
   busy,
   send,
   canMoveUp,
@@ -463,6 +469,7 @@ function AttributeCard({
   attribute: PatAttributeWithValues
   groups: PatAttributeGroup[]
   swatchFiles: Record<string, PatSwatchFileInfo>
+  valueCounts: Record<string, number>
   busy: boolean
   send: (url: string, method: string, body?: unknown) => Promise<Record<string, unknown> | null>
   canMoveUp: boolean
@@ -860,33 +867,35 @@ function AttributeCard({
                     {value.swatchSize || 'size?'}
                   </button>
                 )}
-                {/* Which products hang off this value, in a tab of its own so the
-                    list can be read beside the chips rather than instead of them.
-                    A vocabulary that has drifted into two near-identical values is
-                    only safe to tidy once you can see what each one is holding up. */}
+                {/* How many products hang off this value, and a way through to
+                    them: the number is the answer most of the time, and the tab
+                    it opens is there for the times it is not. A vocabulary that
+                    has drifted into two near-identical values is only safe to
+                    tidy once you can see what each one is holding up. */}
                 <a
                   href={`/${adminPath}/m/product-attributes-for-shop/values/${value.id}`}
                   target="_blank"
                   rel="noreferrer"
-                  aria-label={`Which products use ${value.label}`}
+                  aria-label={`${valueCounts[value.id] ?? 0} product${(valueCounts[value.id] ?? 0) === 1 ? '' : 's'} use ${value.label} - open the list`}
                   title="Which products use this value"
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    width: 14,
-                    height: 14,
+                    minWidth: 16,
+                    height: 16,
+                    padding: '0 0.25rem',
                     borderRadius: 999,
                     border: '1px solid var(--color-border)',
                     color: 'var(--color-text-secondary)',
                     fontSize: '0.625rem',
-                    fontStyle: 'italic',
                     fontWeight: 600,
+                    fontVariantNumeric: 'tabular-nums',
                     lineHeight: 1,
                     textDecoration: 'none',
                   }}
                 >
-                  i
+                  {valueCounts[value.id] ?? 0}
                 </a>
                 <button
                   type="button"

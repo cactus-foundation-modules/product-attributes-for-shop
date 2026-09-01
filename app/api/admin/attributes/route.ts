@@ -11,6 +11,7 @@ import {
   listSwatchFileInfo,
 } from '@/modules/product-attributes-for-shop/lib/db/attributes'
 import { getAttributeGroup } from '@/modules/product-attributes-for-shop/lib/db/groups'
+import { countProductsPerValue } from '@/modules/product-attributes-for-shop/lib/db/value-usage'
 import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
 
 export async function GET() {
@@ -27,7 +28,10 @@ export async function GET() {
       .flatMap((a) => a.values.flatMap((v) => [v.swatch, v.swatchSmall ?? null, v.swatchTiny ?? null]))
       .filter((url): url is string => !!url && isImageSwatch(url)),
   )
-  return NextResponse.json({ attributes, swatchFiles })
+  // How many products hang off each value, counted once for the whole screen so
+  // every chip can print its own number without a request apiece.
+  const valueProductCounts = await countProductsPerValue()
+  return NextResponse.json({ attributes, swatchFiles, valueProductCounts })
 }
 
 const PostBody = z.object({

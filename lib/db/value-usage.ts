@@ -200,3 +200,44 @@ export async function getValueUsage(valueId: string): Promise<PatValueUsage> {
     truncated: tickedRows.length >= ROW_LIMIT,
   }
 }
+
+// How many products each value holds up, for every value at once - the number the
+// attributes screen prints on the chip. Counted the same way the usage page's
+// headline is: variant children roll up to the parent product, and a variation
+// option copied from the value counts its product too, so the chip and the page
+// it opens never disagree.
+//
+// One query for the whole screen rather than one per chip: a Colour attribute
+// alone runs to several hundred values.
+export async function countProductsPerValue(): Promise<Record<string, number>> {
+  const withVariations = await hasVariationsTables()
+
+  // UNION, not UNION ALL: a product that both ticks the value and offers it as a
+  // variation option is one product, not two.
+  const rows = withVariations
+    ? await prisma.$queryRaw<{ value_id: string; count: bigint }[]>`
+        SELECT "value_id", count(*)::bigint AS "count" FROM (
+          SELECT pv."value_id" AS "value_id", COALESCE(v."product_id", pv."product_id") AS "product_id"
+          FROM "pat_product_values" pv
+          JOIN "shp_products" p ON p."id" = pv."product_id"
+          LEFT JOIN "svr_variants" v ON v."child_product_id" = pv."product_id"
+          UNION
+          SELECT ov."source_ref" AS "value_id", o."product_id" AS "product_id"
+          FROM "svr_option_values" ov
+          JOIN "svr_options" o ON o."id" = ov."option_id"
+          JOIN "shp_products" p ON p."id" = o."product_id"
+          WHERE ov."source_ref" IS NOT NULL
+        ) "pairs"
+        GROUP BY "value_id"
+      `
+    : await prisma.$queryRaw<{ value_id: string; count: bigint }[]>`
+        SELECT pv."value_id" AS "value_id", count(DISTINCT pv."product_id")::bigint AS "count"
+        FROM "pat_product_values" pv
+        JOIN "shp_products" p ON p."id" = pv."product_id"
+        GROUP BY pv."value_id"
+      `
+
+  const out: Record<string, number> = {}
+  for (const row of rows) out[row.value_id] = Number(row.count)
+  return out
+}
