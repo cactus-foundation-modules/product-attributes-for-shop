@@ -11,6 +11,10 @@ export type ShopAttributeFilterGridProps = {
   categorySlug?: string
   collectionSlug?: string
   tagSlug?: string
+  /** Everything from one supplier. Filled in for you on a supplier's own page
+   *  (shop's lib/inject-supplier-context.ts, which names this block as a string
+   *  rather than importing it); typed by hand anywhere else. */
+  supplierSlug?: string
   limit?: number
   columns?: number
   filterPosition?: string
@@ -75,6 +79,7 @@ export const shopAttributeFilterGridPuckComponent = {
     categorySlug: { type: 'text' as const, label: 'Category slug (optional)' },
     collectionSlug: { type: 'text' as const, label: 'Collection slug (optional)' },
     tagSlug: { type: 'text' as const, label: 'Tag slug (optional)' },
+    supplierSlug: { type: 'text' as const, label: 'Supplier slug (optional)' },
     limit: { type: 'number' as const, label: 'Number of products' },
     columns: { type: 'number' as const, label: 'Columns' },
     filterPosition: {
@@ -113,6 +118,7 @@ export const shopAttributeFilterGridPuckComponent = {
     categorySlug: '',
     collectionSlug: '',
     tagSlug: '',
+    supplierSlug: '',
     limit: 24,
     columns: 3,
     filterPosition: 'left',

@@ -98,6 +98,7 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
       ...categoryFilter,
       collectionSlug: props.collectionSlug || undefined,
       tagSlug: props.tagSlug || undefined,
+      supplierSlug: props.supplierSlug || undefined,
       // Filtering happens over exactly what is rendered, so what comes back here
       // is the honest ceiling of this block. Unpaged that is `limit` under the
       // default 100 clamp; paged, the whole category up to HARD_MAX_PER_PAGE
