@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useProductEditorSave, useProductEditorTabBadge } from '@/modules/shop/components/admin/product-editor/context'
 import type {
   PatAttributeValue,
@@ -557,38 +557,23 @@ export function ProductAttributesEditor({ productId, variationsInstalled }: { pr
                         </label>
                       </div>
 
-                      {h.useForVariations ? (
+                      {h.useForVariations && (
                         <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
                           {hasVariants
                             ? 'Set each variant’s value in the new column on the Variations tab. Add the choices it offers below.'
                             : 'Add variants on the Variations tab, then set each one’s value there. Add the choices it offers below.'}
                         </p>
-                      ) : attribute.values.length === 0 ? (
-                        <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>No values set up yet.</span>
-                      ) : (
-                        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                          {attribute.values.map((value) => (
-                            <label key={value.id} className="spe-check" style={{ border: '1px solid var(--color-border)' }}>
-                              <input
-                                type="checkbox"
-                                checked={h.values.has(value.id)}
-                                aria-label={`${value.label} for ${name}`}
-                                onChange={() => toggleValue(h.key, value.id)}
-                              />
-                              {value.swatch && isImageSwatch(value.swatch) ? (
-                                // eslint-disable-next-line @next/next/no-img-element -- media library URLs are arbitrary remote hosts, not a configured next/image loader
-                                <img src={value.swatch} alt="" style={{ width: 16, height: 16, objectFit: 'cover', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }} />
-                              ) : value.swatch ? (
-                                <span aria-hidden style={{ width: 10, height: 10, borderRadius: 'var(--radius-full)', background: value.swatch, border: '1px solid var(--color-border)' }} />
-                              ) : null}
-                              {value.label}
-                            </label>
-                          ))}
-                        </div>
                       )}
 
-                      <AddValueBox
+                      <AttributeValues
                         attribute={attribute}
+                        helpingName={name}
+                        selected={h.values}
+                        // A per-variant helping's values belong to the variants,
+                        // so there is nothing here to tick and nothing to suggest
+                        // ticking - only the box that adds to the vocabulary.
+                        selectable={!h.useForVariations}
+                        onToggle={(valueId) => toggleValue(h.key, valueId)}
                         onAdd={(attributeId, label, swatch) => addValue(h.key, attributeId, label, swatch)}
                       />
                     </div>
@@ -839,76 +824,257 @@ function SpecBucket({
   )
 }
 
-// The "add a value" row under one attribute on the product editor. Swatch
-// attributes get a colour alongside the label and picture attributes get a
-// thumbnail, matching the attributes screen, so a value added here still shows
-// its visual on the storefront filter rather than a blank circle.
-function AddValueBox({
+// How many existing values the box offers at once. Long enough to be worth
+// scanning, short enough that the list never becomes the page again - which is
+// the whole point of the change below.
+const SUGGESTION_LIMIT = 8
+
+/** A value's swatch, as the ticks and the suggestions both draw it: a picture
+ *  for an image attribute, a dot for a colour one, nothing otherwise. */
+function ValueSwatch({ value }: { value: PatAttributeValue }) {
+  if (!value.swatch) return null
+  if (isImageSwatch(value.swatch)) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- media library URLs are arbitrary remote hosts, not a configured next/image loader
+      <img src={value.swatch} alt="" style={{ width: 16, height: 16, objectFit: 'cover', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }} />
+    )
+  }
+  return <span aria-hidden style={{ width: 10, height: 10, borderRadius: 'var(--radius-full)', background: value.swatch, border: '1px solid var(--color-border)' }} />
+}
+
+/**
+ * One attribute's values on the product editor: what this product is ticked for,
+ * and the box that finds or adds another.
+ *
+ * It lists the CHOSEN values only. It used to list every value the shop has ever
+ * recorded against the attribute, which on a real catalogue is several hundred
+ * widths - the handful actually ticked lost among them, and the box that adds
+ * one pushed off the bottom of the screen. Finding an existing value is now the
+ * box's job rather than the eye's, and the same box still adds a new one.
+ *
+ * Swatch attributes get a colour alongside the label and picture attributes a
+ * thumbnail, matching the attributes screen, so a value added here still shows
+ * its visual on the storefront filter rather than a blank circle.
+ */
+function AttributeValues({
   attribute,
+  helpingName,
+  selected,
+  selectable,
+  onToggle,
   onAdd,
 }: {
   attribute: PatAttributeWithValues
+  /** What this helping goes by, for the ticks' accessible names. */
+  helpingName: string
+  selected: ReadonlySet<string>
+  /** False for a per-variant helping: its values live on the variants, so there
+   *  is nothing here to tick and nothing to suggest ticking - only the box that
+   *  adds to the shop-wide vocabulary. */
+  selectable: boolean
+  onToggle: (valueId: string) => void
   onAdd: (attributeId: string, label: string, swatch: string | null) => Promise<boolean>
 }) {
   const [label, setLabel] = useState('')
   const [swatch, setSwatch] = useState('#888888')
   const [image, setImage] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [highlight, setHighlight] = useState(-1)
+  // Values unticked during this sitting stay on screen. The list shows what is
+  // chosen, so without this an untick would make the row vanish under the
+  // cursor - which reads as having deleted the value from the shop rather than
+  // as having taken it off this product.
+  const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set<string>())
+  const listId = useId()
   const isSwatch = attribute.controlType === 'SWATCH'
   const isImage = attribute.controlType === 'IMAGE'
+
+  const shown = useMemo(
+    () => attribute.values.filter((v) => selected.has(v.id) || kept.has(v.id)),
+    [attribute.values, selected, kept],
+  )
+
+  const query = label.trim().toLowerCase()
+  const suggestions = useMemo(() => {
+    if (!selectable) return []
+    const pool = attribute.values.filter((v) => !selected.has(v.id))
+    const matched = query === '' ? pool : pool.filter((v) => v.label.toLowerCase().includes(query))
+    return [...matched]
+      .sort((a, b) => {
+        // A label that STARTS with what has been typed comes first: typing "90"
+        // should offer 90cm before 190cm. Numeric collation then keeps 9cm above
+        // 90cm, which plain string order does not.
+        const rank = Number(!a.label.toLowerCase().startsWith(query)) - Number(!b.label.toLowerCase().startsWith(query))
+        return rank || a.label.localeCompare(b.label, 'en-GB', { numeric: true })
+      })
+      .slice(0, SUGGESTION_LIMIT)
+  }, [attribute.values, query, selected, selectable])
+
+  const listOpen = open && suggestions.length > 0
+
+  function reveal(valueId: string) {
+    setKept((prev) => (prev.has(valueId) ? prev : new Set(prev).add(valueId)))
+  }
+
+  function choose(value: PatAttributeValue) {
+    reveal(value.id)
+    onToggle(value.id)
+    setLabel('')
+    setOpen(false)
+    setHighlight(-1)
+  }
 
   async function submit() {
     const trimmed = label.trim()
     if (!trimmed || saving) return
+    // A label the shop already holds IS that value, not a new one. The endpoint
+    // would reuse it anyway (reuseExisting), so this only saves the round trip -
+    // and ticks it, which is what someone typing a name they can see in the list
+    // is asking for.
+    const existing = selectable
+      ? attribute.values.find((v) => v.label.toLowerCase() === trimmed.toLowerCase())
+      : undefined
+    if (existing) {
+      if (selected.has(existing.id)) { setLabel(''); setOpen(false); setHighlight(-1) }
+      else choose(existing)
+      return
+    }
     setSaving(true)
     const ok = await onAdd(attribute.id, trimmed, isSwatch ? swatch : isImage ? image : null)
     setSaving(false)
     // The picture is cleared with the label - it belonged to the value just added.
-    if (ok) { setLabel(''); setImage(null) }
+    if (ok) { setLabel(''); setImage(null); setOpen(false); setHighlight(-1) }
   }
 
   return (
-    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.625rem' }}>
-      <input
-        className="form-control"
-        style={{ flex: '1 1 10rem', minWidth: '8rem', fontSize: '0.8125rem' }}
-        placeholder={`Add a ${attribute.name.toLowerCase()} value…`}
-        value={label}
-        disabled={saving}
-        onChange={(e) => setLabel(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            // The product editor wraps this in a form; Enter must add a value, not save the product.
-            e.preventDefault()
-            void submit()
-          }
-        }}
-        aria-label={`New value for ${attribute.name}`}
-      />
-      {isSwatch && (
-        <input
-          type="color"
-          className="form-control"
-          style={{ flex: '0 0 3rem', padding: '0.125rem' }}
-          value={swatch}
-          disabled={saving}
-          onChange={(e) => setSwatch(e.target.value)}
-          aria-label={`Colour for the new ${attribute.name} value`}
-        />
-      )}
-      {isImage && (
-        <SwatchImagePicker
-          attributeId={attribute.id}
-          value={image}
-          label={`the new ${attribute.name} value`}
-          disabled={saving}
-          size={28}
-          onPick={(url) => setImage(url)}
-        />
-      )}
-      <button type="button" className="btn btn-secondary btn-sm" disabled={saving || !label.trim()} onClick={() => void submit()}>
-        Add value
-      </button>
-    </div>
+    <>
+      {selectable && (shown.length > 0 ? (
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          {shown.map((value) => (
+            <label key={value.id} className="spe-check" style={{ border: '1px solid var(--color-border)' }}>
+              <input
+                type="checkbox"
+                checked={selected.has(value.id)}
+                aria-label={`${value.label} for ${helpingName}`}
+                onChange={() => { reveal(value.id); onToggle(value.id) }}
+              />
+              <ValueSwatch value={value} />
+              {value.label}
+            </label>
+          ))}
+        </div>
+      ) : (
+        <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
+          {attribute.values.length === 0
+            ? 'No values set up yet.'
+            : `Nothing chosen yet. Start typing below to find one of the ${attribute.values.length} the shop already has, or add a new one.`}
+        </span>
+      ))}
+
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.625rem' }}>
+        <div style={{ position: 'relative', flex: '1 1 10rem', minWidth: '8rem' }}>
+          <input
+            className="form-control"
+            style={{ width: '100%', fontSize: '0.8125rem' }}
+            placeholder={`Add a ${attribute.name.toLowerCase()} value…`}
+            value={label}
+            disabled={saving}
+            role={selectable ? 'combobox' : undefined}
+            aria-expanded={selectable ? listOpen : undefined}
+            aria-controls={selectable ? listId : undefined}
+            aria-autocomplete={selectable ? 'list' : undefined}
+            aria-activedescendant={listOpen && highlight >= 0 ? `${listId}-${highlight}` : undefined}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setOpen(false)}
+            onChange={(e) => { setLabel(e.target.value); setOpen(true); setHighlight(-1) }}
+            onKeyDown={(e) => {
+              if (selectable && suggestions.length > 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                e.preventDefault()
+                setOpen(true)
+                setHighlight((i) => (e.key === 'ArrowDown'
+                  ? (i + 1) % suggestions.length
+                  : i <= 0 ? suggestions.length - 1 : i - 1))
+                return
+              }
+              if (e.key === 'Escape') { setOpen(false); setHighlight(-1); return }
+              if (e.key === 'Enter') {
+                // The product editor wraps this in a form; Enter must pick or add
+                // a value, not save the product.
+                e.preventDefault()
+                const picked = listOpen && highlight >= 0 ? suggestions[highlight] : undefined
+                if (picked) choose(picked)
+                else void submit()
+              }
+            }}
+            aria-label={selectable ? `Find or add a value for ${helpingName}` : `New value for ${attribute.name}`}
+          />
+          {listOpen && (
+            <ul
+              id={listId}
+              role="listbox"
+              aria-label={`Existing ${attribute.name.toLowerCase()} values`}
+              style={{
+                position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 30,
+                margin: '0.125rem 0 0', padding: '0.25rem', listStyle: 'none',
+                maxHeight: '15rem', overflowY: 'auto',
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                boxShadow: '0 6px 16px rgb(0 0 0 / 0.12)',
+              }}
+            >
+              {suggestions.map((value, i) => (
+                <li
+                  key={value.id}
+                  id={`${listId}-${i}`}
+                  role="option"
+                  aria-selected={i === highlight}
+                  // Kept off blur so the click still lands on the input's owner:
+                  // a plain click would blur first and shut the list under it.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onMouseEnter={() => setHighlight(i)}
+                  onClick={() => choose(value)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.375rem',
+                    padding: '0.3125rem 0.5rem', borderRadius: 'var(--radius-sm)',
+                    fontSize: '0.8125rem', cursor: 'pointer',
+                    background: i === highlight ? 'var(--color-bg-subtle)' : 'transparent',
+                    color: 'var(--color-text)',
+                  }}
+                >
+                  <ValueSwatch value={value} />
+                  {value.label}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        {isSwatch && (
+          <input
+            type="color"
+            className="form-control"
+            style={{ flex: '0 0 3rem', padding: '0.125rem' }}
+            value={swatch}
+            disabled={saving}
+            onChange={(e) => setSwatch(e.target.value)}
+            aria-label={`Colour for the new ${attribute.name} value`}
+          />
+        )}
+        {isImage && (
+          <SwatchImagePicker
+            attributeId={attribute.id}
+            value={image}
+            label={`the new ${attribute.name} value`}
+            disabled={saving}
+            size={28}
+            onPick={(url) => setImage(url)}
+          />
+        )}
+        <button type="button" className="btn btn-secondary btn-sm" disabled={saving || !label.trim()} onClick={() => void submit()}>
+          Add value
+        </button>
+      </div>
+    </>
   )
 }
