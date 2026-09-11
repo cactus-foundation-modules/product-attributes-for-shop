@@ -18,6 +18,7 @@ import { getSettings } from '@/modules/product-attributes-for-shop/lib/db/settin
 import { AttributeFilterShell } from '@/modules/product-attributes-for-shop/components/public/AttributeFilterShell'
 import { attributeFilterCss } from '@/modules/product-attributes-for-shop/components/public/filter-css'
 import { shopAttributeFilterGridPuckComponent, type ShopAttributeFilterGridProps } from './ShopAttributeFilterGrid'
+import { SharedStyle } from '@/components/SharedStyle'
 
 // Server (RSC) half of Shop: Filtered Product Grid.
 //
@@ -156,7 +157,8 @@ export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridP
 
   return (
     <>
-      <style dangerouslySetInnerHTML={{ __html: shopCardCss(bp) + attributeFilterCss(bp) }} />
+      <SharedStyle id="shop-cards" css={shopCardCss(bp)} />
+      <SharedStyle id="attribute-filter" css={attributeFilterCss(bp)} />
       <AttributeFilterShell
         attributes={offered}
         matrix={Object.fromEntries(matrix)}
