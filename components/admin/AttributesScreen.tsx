@@ -42,10 +42,6 @@ export function AttributesScreen() {
   const [newGroupId, setNewGroupId] = useState('')
   const [newGroupName, setNewGroupName] = useState('')
   const [busy, setBusy] = useState(false)
-  const [tidied, setTidied] = useState<string | null>(null)
-  // The small-copies backfill narrates itself here: batches take a while, and a
-  // button that sits silent for a minute reads as broken.
-  const [copyProgress, setCopyProgress] = useState<string | null>(null)
 
   // Falls back to "No group" if the chosen folder has since been deleted, so the
   // picker never shows one thing while the Add button sends another.
@@ -121,57 +117,6 @@ export function AttributesScreen() {
     if (!name) return
     const ok = await send('/api/m/product-attributes-for-shop/admin/groups', 'POST', { name })
     if (ok) setNewGroupName('')
-  }
-
-  async function tidySwatches() {
-    setTidied(null)
-    const ok = await send('/api/m/product-attributes-for-shop/admin/refile-swatches', 'POST')
-    if (ok) setTidied('Done - every picture swatch is filed where it belongs.')
-  }
-
-  // Loops the batched backfill until it reports done, narrating progress as it
-  // goes. Plain fetches rather than send(): reloading the whole screen after
-  // every batch of eight would make a long backfill feel broken, so the list is
-  // refreshed once at the end instead.
-  async function makeSwatchCopies() {
-    setBusy(true)
-    setError(null)
-    setCopyProgress('Working…')
-    let afterId: string | undefined
-    let made = 0
-    let skipped = 0
-    try {
-      for (;;) {
-        const res = await fetch('/api/m/product-attributes-for-shop/admin/generate-swatch-copies', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(afterId ? { afterId } : {}),
-        })
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}))
-          setError(data.error ?? 'Something went wrong.')
-          setCopyProgress(null)
-          return
-        }
-        const data = (await res.json()) as { made: number; skipped: number; lastId?: string; remaining: number; done: boolean }
-        made += data.made
-        skipped += data.skipped
-        setCopyProgress(`${made} made so far - ${data.remaining} still to look at…`)
-        if (data.done) break
-        afterId = data.lastId
-      }
-      setCopyProgress(
-        made === 0 && skipped === 0
-          ? 'Nothing needed one - every picture swatch already has both its copies.'
-          : `Done - copies made for ${made} ${made === 1 ? 'swatch' : 'swatches'}${skipped > 0 ? `, ${skipped} left as they were` : ''}.`,
-      )
-      await load()
-    } catch {
-      setError('Something went wrong.')
-      setCopyProgress(null)
-    } finally {
-      setBusy(false)
-    }
   }
 
   // One section per group, in the owner's order, then whatever is still loose.
@@ -282,31 +227,6 @@ export function AttributesScreen() {
           />
           <button className="btn btn-secondary" disabled={busy || !newGroupName.trim()} onClick={() => void addGroup()}>Add group</button>
         </div>
-      </section>
-
-      <section style={{ border: '1px solid var(--color-border)', borderRadius: 12, padding: '1rem 1.25rem', background: 'var(--color-surface)', marginBottom: '1.5rem' }}>
-        <h2 style={{ fontSize: '0.9375rem', margin: '0 0 0.75rem' }}>Tidy picture folders</h2>
-        <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
-          Files every attribute&apos;s swatch pictures into its own folder in the media library
-          (Shop / Attributes), and points anything using them at the new home. Safe to press
-          any time - pictures already in the right place stay put.
-        </p>
-        <button className="btn btn-secondary" disabled={busy} onClick={() => void tidySwatches()}>Tidy picture folders</button>
-        {tidied && <span style={{ marginLeft: '0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>{tidied}</span>}
-      </section>
-
-      <section style={{ border: '1px solid var(--color-border)', borderRadius: 12, padding: '1rem 1.25rem', background: 'var(--color-surface)', marginBottom: '1.5rem' }}>
-        <h2 style={{ fontSize: '0.9375rem', margin: '0 0 0.75rem' }}>Smaller copies for the shop</h2>
-        <p style={{ margin: '0 0 0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
-          Makes two smaller copies of each picture swatch: a small one for the product page, where a
-          swatch grows when a shopper hovers it, and a tiny one for the dots on category pages and in
-          the filters. Between them they stop shoppers downloading full-size fabric photographs just
-          to see a row of little circles. The originals stay put for anything that needs them at full
-          size, like the 3D views. New pictures get their copies on upload; this catches up the ones
-          from before, including swatches that only got the small copy. Safe to press any time.
-        </p>
-        <button className="btn btn-secondary" disabled={busy} onClick={() => void makeSwatchCopies()}>Make copies</button>
-        {copyProgress && <span style={{ marginLeft: '0.75rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }} role="status">{copyProgress}</span>}
       </section>
 
       {!loaded ? null : attributes.length === 0 && groups.length === 0 ? (
