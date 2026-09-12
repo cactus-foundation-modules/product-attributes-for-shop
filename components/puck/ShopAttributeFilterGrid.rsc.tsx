@@ -1,3 +1,5 @@
+import { Suspense } from 'react'
+import { CardGridSkeleton } from '@/components/CardGridSkeleton'
 import { connection } from 'next/server'
 import type { Data } from '@puckeditor/core'
 import { listProducts, getProductMediaForProducts, getProductTagIdsForProducts, HARD_MAX_PER_PAGE } from '@/modules/shop/lib/db'
@@ -76,7 +78,26 @@ async function renderTaggedCards(template: PuckData | null, items: CardItem[], m
   ))
 }
 
-export async function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridProps) {
+// The Suspense boundary has to be OUTSIDE the async work, which is why this is a
+// plain function wrapping an async one: a Suspense declared inside the async
+// component would already have awaited everything before React saw it. Same
+// shape, and the same hard-won reason, as ProductDiscoveryRsc.
+//
+// WHAT IT BUYS, measured cold on the live site: a filter collection page took
+// 4.3 seconds to its FIRST BYTE, because this block's product query had to
+// finish before the header could be sent. The work is unchanged; the page simply
+// starts arriving straight away and the grid fills in underneath it. There is no
+// notFound() or redirect() in the body, so committing the response early costs
+// no status code - the route settles that before any block renders.
+export function ShopAttributeFilterGridRsc(props: ShopAttributeFilterGridProps) {
+  return (
+    <Suspense fallback={<CardGridSkeleton columns={props.columns ?? 3} count={Math.floor(Number(props.pageSize)) || props.limit || 12} />}>
+      <ShopAttributeFilterGridRscBody {...props} />
+    </Suspense>
+  )
+}
+
+async function ShopAttributeFilterGridRscBody(props: ShopAttributeFilterGridProps) {
   await connection()
   const columns = props.columns ?? 3
   // Paging off is this block exactly as it was: fetch `limit`, render `limit`,
