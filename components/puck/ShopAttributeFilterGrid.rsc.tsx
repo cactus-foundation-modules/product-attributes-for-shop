@@ -1,5 +1,4 @@
 import { connection } from 'next/server'
-import { Render } from '@puckeditor/core/rsc'
 import type { Data } from '@puckeditor/core'
 import { listProducts, getProductMediaForProducts, getProductTagIdsForProducts, HARD_MAX_PER_PAGE } from '@/modules/shop/lib/db'
 import { listTags, resolveCategoryProductFilter } from '@/modules/shop/lib/db/catalogue'
@@ -19,6 +18,7 @@ import { AttributeFilterShell } from '@/modules/product-attributes-for-shop/comp
 import { attributeFilterCss } from '@/modules/product-attributes-for-shop/components/public/filter-css'
 import { shopAttributeFilterGridPuckComponent, type ShopAttributeFilterGridProps } from './ShopAttributeFilterGrid'
 import { SharedStyle } from '@/components/SharedStyle'
+import { CactusRender } from '@/lib/puck/CactusRender'
 
 // Server (RSC) half of Shop: Filtered Product Grid.
 //
@@ -47,7 +47,7 @@ async function renderTaggedCards(template: PuckData | null, items: CardItem[], m
       data-pat-values={(matrix.get(product.id) ?? []).join(' ')}
     >
       {template ? (
-        <Render config={config as any} data={injectShopProductCardEmbed(template, ctx) as Data} />
+        <CactusRender config={config as any} data={injectShopProductCardEmbed(template, ctx) as Data} />
       ) : (
         <>
           <div className="shop-card-img">
