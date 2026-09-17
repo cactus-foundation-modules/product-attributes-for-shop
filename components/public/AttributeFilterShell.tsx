@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { PatAttributeWithValues } from '@/modules/product-attributes-for-shop/lib/types'
 import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
 import { matchesSelection } from '@/modules/product-attributes-for-shop/lib/filter-logic'
+import { holdScrollPosition } from '@/modules/product-attributes-for-shop/lib/hold-scroll-position'
 
 export type FilterShellProps = {
   attributes: PatAttributeWithValues[]
@@ -210,8 +211,12 @@ export function AttributeFilterShell({ attributes, matrix, counts, columns, posi
   // unbounded counter was never actually reachable - but leaving it unbounded
   // means the one number the observer drives has no ceiling at all, and the two
   // implementations of the same idea disagreed. They agree now.
+  // Held, because the next cards appear in this very commit, above the footer or
+  // the focused button the browser would otherwise keep on screen - which
+  // carries a shopper who scrolled to the end down to the footer instead of
+  // leaving them looking at the new products. See holdScrollPosition.
   const showMore = useCallback(
-    () => setShownLimit((n) => Math.min(n + pageSize, matchingTotal)),
+    () => holdScrollPosition(() => setShownLimit((n) => Math.min(n + pageSize, matchingTotal))),
     [pageSize, matchingTotal],
   )
   const sentinelRef = useRef<HTMLDivElement>(null)

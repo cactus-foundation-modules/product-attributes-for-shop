@@ -5,11 +5,13 @@ import type { Data } from '@puckeditor/core'
 import { listProducts, getProductMediaForProducts, getProductTagIdsForProducts, HARD_MAX_PER_PAGE } from '@/modules/shop/lib/db'
 import { listTags, resolveCategoryProductFilter } from '@/modules/shop/lib/db/catalogue'
 import { getShopConfigCached } from '@/modules/shop/lib/config'
+import { resolveTaxDisplay } from '@/modules/shop/lib/tax-display'
 import { getShopBreakpoints } from '@/modules/shop/lib/breakpoints'
 import { resolveCardTemplate, buildCardContext, buildTagMaps } from '@/modules/shop/lib/card-template'
 import { resolveCardFromPrices } from '@/modules/shop/lib/card-price'
 import { injectShopProductCardEmbed } from '@/modules/shop/lib/inject-part-context'
 import { formatMoney } from '@/modules/shop/lib/money'
+import { TaxViewMoney, TaxViewNote } from '@/modules/shop/components/public/TaxViewText'
 import { shopCardCss } from '@/modules/shop/components/puck/parts/card-parts'
 import type { PuckData } from '@/modules/shop/lib/types'
 import type { CardItem } from '@/modules/shop/lib/card-template'
@@ -64,13 +66,16 @@ async function renderTaggedCards(template: PuckData | null, items: CardItem[], m
           <h3 className="shop-card-name">{product.name}</h3>
           <div className="shop-card-pricerow">
             {ctx.fromPrice != null ? (
-              <span className="shop-card-price">{ctx.fromPriceVaries ? 'From ' : ''}{formatMoney(ctx.fromPrice, ctx.currencySymbol)}</span>
+              <span className="shop-card-price">{ctx.fromPriceVaries ? 'From ' : ''}<TaxViewMoney amount={Number(ctx.fromPrice)} view={ctx.taxView} format={(n) => formatMoney(n, ctx.currencySymbol)} /></span>
             ) : (
               <>
-                <span className="shop-card-price">{formatMoney(ctx.prices.now, ctx.currencySymbol)}</span>
-                {ctx.prices.was && <span className="shop-card-compare">{formatMoney(ctx.prices.was, ctx.currencySymbol)}</span>}
+                <span className="shop-card-price"><TaxViewMoney amount={Number(ctx.prices.now)} view={ctx.taxView} format={(n) => formatMoney(n, ctx.currencySymbol)} /></span>
+                {ctx.prices.was && <span className="shop-card-compare"><TaxViewMoney amount={Number(ctx.prices.was)} view={ctx.taxView} format={(n) => formatMoney(n, ctx.currencySymbol)} /></span>}
               </>
             )}
+            {/* Shop's own fallback card prints the tax wording too, and it follows the
+                shopper's VAT switch with the figures (lib/tax-view-shared.ts). */}
+            <TaxViewNote view={ctx.taxView} suffix={ctx.priceSuffix} className="shop-card-taxnote" />
           </div>
         </>
       )}
@@ -107,7 +112,13 @@ async function ShopAttributeFilterGridRscBody(props: ShopAttributeFilterGridProp
   const limit = props.limit ?? 24
   const pageSize = paginate === 'none' ? limit : Math.max(1, Math.floor(Number(props.pageSize)) || limit)
   const fetchCount = paginate === 'none' ? limit : HARD_MAX_PER_PAGE
-  const config = await getShopConfigCached()
+  // Tax display resolved with the config and handed to every card context, as
+  // shop's own grids do (lib/grid-page.ts). Without it the cards printed stored
+  // figures whatever the shop's Prices setting said, and carried no VAT switch
+  // at all - so a shopper who switched on a product page came back to a category
+  // still quoting the other side.
+  const [config, taxDisplay] = await Promise.all([getShopConfigCached(), resolveTaxDisplay()])
+  const pricing = { ...config, taxDisplay }
   const categoryFilter = props.categorySlug
     ? await resolveCategoryProductFilter(props.categorySlug, config.categoryProductDisplayMode)
     : {}
@@ -155,7 +166,7 @@ async function ShopAttributeFilterGridRscBody(props: ShopAttributeFilterGridProp
   const { tagById, tagsById } = buildTagMaps(tags)
   const items: CardItem[] = products.map((product) => ({
     product,
-    ctx: buildCardContext(product, mediaByProduct.get(product.id) ?? [], tagById, tagIdsByProduct.get(product.id) ?? [], config.currencySymbol, config, fromPrices.get(product.id) ?? null, undefined, tagsById),
+    ctx: buildCardContext(product, mediaByProduct.get(product.id) ?? [], tagById, tagIdsByProduct.get(product.id) ?? [], config.currencySymbol, pricing, fromPrices.get(product.id) ?? null, undefined, tagsById),
   }))
 
   const cards = await renderTaggedCards(template, items, matrix)
