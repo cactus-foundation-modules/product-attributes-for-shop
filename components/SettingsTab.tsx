@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { SettingsHeaderActions, SettingsHeaderStatus } from '@/components/admin/SettingsHeaderActions'
 
 type PatSettings = {
   hideEmptyValues: boolean
@@ -39,8 +40,8 @@ export function ProductAttributesSettingsTab() {
       .catch(() => setError('Could not load these settings. Please refresh the page.'))
   }, [])
 
-  async function save(e: React.FormEvent) {
-    e.preventDefault()
+  async function save(e?: React.FormEvent) {
+    e?.preventDefault()
     if (!settings) return
     setSaving(true)
     setError('')
@@ -74,6 +75,7 @@ export function ProductAttributesSettingsTab() {
         How the product filters behave on your shop pages.
       </p>
 
+      <div className="settings-cols">
       {TOGGLES.map((t) => (
         <div key={t.key} style={{ marginBottom: '1.25rem' }}>
           <label style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-start', cursor: 'pointer' }}>
@@ -95,13 +97,16 @@ export function ProductAttributesSettingsTab() {
           </label>
         </div>
       ))}
+      </div>
 
       {error && <p style={{ color: 'var(--color-error)', marginBottom: '1rem' }}>{error}</p>}
-      {saved && !error && <p style={{ color: 'var(--color-text-muted)', marginBottom: '1rem' }}>Saved.</p>}
 
-      <button type="submit" className="btn btn-primary" disabled={saving}>
-        {saving ? 'Saving…' : 'Save settings'}
-      </button>
+      <SettingsHeaderActions>
+        <SettingsHeaderStatus message={saved ? 'Saved' : null} error={error} />
+        <button type="button" className="btn btn-primary" disabled={saving} onClick={() => save()}>
+          {saving ? 'Saving…' : 'Save changes'}
+        </button>
+      </SettingsHeaderActions>
     </form>
   )
 }
