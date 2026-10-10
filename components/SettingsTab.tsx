@@ -71,32 +71,24 @@ export function ProductAttributesSettingsTab() {
 
   return (
     <form onSubmit={save}>
-      <p style={{ color: 'var(--color-text-muted)', marginBottom: '1.5rem' }}>
-        How the product filters behave on your shop pages.
-      </p>
-
-      <div className="settings-cols">
-      {TOGGLES.map((t) => (
-        <div key={t.key} style={{ marginBottom: '1.25rem' }}>
-          <label style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-start', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={settings[t.key]}
-              onChange={(e) => {
-                setSaved(false)
-                setSettings({ ...settings, [t.key]: e.target.checked })
-              }}
-              style={{ marginTop: '0.2rem' }}
-            />
-            <span>
-              <span style={{ display: 'block', color: 'var(--color-text)' }}>{t.label}</span>
-              <span style={{ display: 'block', fontSize: '0.875rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
-                {t.hint}
-              </span>
-            </span>
-          </label>
-        </div>
-      ))}
+      <div className="card settings-fields">
+        <h3 className="card-title">Filters on shop pages</h3>
+        {TOGGLES.map((t) => (
+          <div key={t.key}>
+            <label className="settings-check">
+              <input
+                type="checkbox"
+                checked={settings[t.key]}
+                onChange={(e) => {
+                  setSaved(false)
+                  setSettings({ ...settings, [t.key]: e.target.checked })
+                }}
+              />
+              {t.label}
+            </label>
+            <p className="field-hint" style={{ margin: '0.25rem 0 0 1.75rem' }}>{t.hint}</p>
+          </div>
+        ))}
       </div>
 
       {error && <p style={{ color: 'var(--color-error)', marginBottom: '1rem' }}>{error}</p>}
