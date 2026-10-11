@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { PatAttributeGroup, PatAttributeWithValues, PatControlType, PatSwatchFileInfo } from '@/modules/product-attributes-for-shop/lib/types'
 import { isImageSwatch } from '@/modules/product-attributes-for-shop/lib/types'
 import { useAdminPath } from '@/components/admin/AdminPathContext'
+import { useAdminConfirm } from '@/components/admin/useAdminConfirm'
 import { SwatchImagePicker } from '@/modules/product-attributes-for-shop/components/admin/SwatchImagePicker'
 import { SwatchRenditions } from '@/modules/product-attributes-for-shop/components/admin/SwatchRenditions'
 
@@ -332,9 +333,11 @@ function GroupHeader({
   onMove: (index: number, delta: number) => Promise<void>
 }) {
   const base = '/api/m/product-attributes-for-shop/admin'
+  const [askConfirm, confirmNode] = useAdminConfirm()
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', margin: '0 0 0.75rem' }}>
+      {confirmNode}
       <h2 style={{ fontSize: '0.875rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--color-text-secondary)', margin: 0 }}>
         {group ? group.name : 'Not in a group'}
       </h2>
@@ -360,11 +363,11 @@ function GroupHeader({
           <button
             className="btn btn-secondary btn-sm"
             disabled={busy}
-            onClick={() => {
-              const warning = count === 0
-                ? `Delete the "${group.name}" group?`
-                : `Delete the "${group.name}" group? Its ${count} attribute${count === 1 ? '' : 's'} stay put, just ungrouped.`
-              if (confirm(warning)) void send(`${base}/groups/${group.id}`, 'DELETE')
+            onClick={async () => {
+              const message = count === 0
+                ? 'The group is removed straight away.'
+                : `Its ${count} attribute${count === 1 ? '' : 's'} stay put, just ungrouped.`
+              if (await askConfirm({ title: `Delete the "${group.name}" group?`, message })) void send(`${base}/groups/${group.id}`, 'DELETE')
             }}
           >
             Delete group
@@ -522,9 +525,11 @@ function AttributeCard({
 
   const shownValues = attribute.values.slice(0, visibleValues)
   const hiddenValueCount = attribute.values.length - shownValues.length
+  const [askConfirm, confirmNode] = useAdminConfirm()
 
   return (
     <section style={{ border: '1px solid var(--color-border)', borderRadius: 12, padding: '1rem 1.25rem', background: 'var(--color-surface)' }}>
+      {confirmNode}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h3 style={{ fontSize: '0.9375rem', margin: 0 }}>
@@ -606,8 +611,8 @@ function AttributeCard({
           <button
             className="btn btn-secondary btn-sm"
             disabled={busy}
-            onClick={() => {
-              if (confirm(`Delete "${attribute.name}"? Every product loses this attribute.`)) {
+            onClick={async () => {
+              if (await askConfirm({ title: `Delete "${attribute.name}"?`, message: 'Every product loses this attribute.' })) {
                 void send(`${base}/attributes/${attribute.id}`, 'DELETE')
               }
             }}
