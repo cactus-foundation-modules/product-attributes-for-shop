@@ -584,6 +584,22 @@ function AttributeCard({
           >
             Rename
           </button>
+          {/* Values keep any colour or picture they carry when the type changes, so
+              switching away and back loses nothing. */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.875rem' }}>
+            <span style={{ color: 'var(--color-text-secondary)' }}>Type</span>
+            <select
+              className="form-control"
+              style={{ width: 'auto', fontSize: '0.8125rem', padding: '0.25rem 0.5rem' }}
+              value={attribute.controlType}
+              disabled={busy}
+              onChange={(e) => void send(`${base}/attributes/${attribute.id}`, 'PATCH', { controlType: e.target.value })}
+            >
+              {(Object.keys(CONTROL_LABELS) as PatControlType[]).map((k) => (
+                <option key={k} value={k}>{CONTROL_LABELS[k]}</option>
+              ))}
+            </select>
+          </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.875rem' }}>
             <span style={{ color: 'var(--color-text-secondary)' }}>Group</span>
             <select
